@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustyLife Dashboard</title>
+    <style>
+        :root {
+            --primary: #f472b6;
+            --bg: #111827;
+            --card-bg: #1f2937;
+            --text: #f9fafb;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .container {
+            background: var(--card-bg);
+            padding: 3rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            background: linear-gradient(to right, #f472b6, #fb923c);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .counter {
+            font-size: 5rem;
+            font-weight: 900;
+            font-variant-numeric: tabular-nums;
+            margin: 2rem 0;
+            color: var(--text);
+        }
+
+        button {
+            background: linear-gradient(135deg, #f472b6, #db2777);
+            color: white;
+            border: none;
+            padding: 1rem 2.5rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 10px 15px -3px rgba(244, 114, 182, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 25px -5px rgba(244, 114, 182, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .status {
+            margin-top: 2rem;
+            font-size: 0.875rem;
+            color: #9ca3af;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            margin-right: 0.5rem;
+        }
+
+        .dot.connected {
+            background: #10b981;
+            box-shadow: 0 0 10px #10b981;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>RustyLife</h1>
+        <div class="counter" id="count">0</div>
+        <button id="increment-btn">Increment</button>
+        <div class="status">
+            <span id="status-dot" class="dot"></span>
+            <span id="status-text">Disconnected</span>
+        </div>
+    </div>
+
+    <script>
+        const countEl = document.getElementById('count');
+        const btn = document.getElementById('increment-btn');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+
+        let socket;
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            socket.onopen = () => {
+                statusDot.classList.add('connected');
+                statusText.innerText = 'Connected';
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                countEl.innerText = data.count;
+            };
+
+            socket.onclose = () => {
+                statusDot.classList.remove('connected');
+                statusText.innerText = 'Disconnected - retrying...';
+                setTimeout(connect, 2000);
+            };
+        }
+
+        btn.onclick = () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send('increment');
+            }
+        };
+
+        connect();
+    </script>
+</body>
+
+</html>

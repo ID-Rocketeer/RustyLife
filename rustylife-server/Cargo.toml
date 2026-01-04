@@ -1,0 +1,16 @@
+[package]
+name = "rustylife-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustylife-core = { path = "../rustylife-core" }
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+egui = "0.28"
+eframe = "0.28"
+# Removed interprocess

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "rustylife-core",
+    "rustylife-server",
+    "rustylife-client",
+]
+resolver = "2"
