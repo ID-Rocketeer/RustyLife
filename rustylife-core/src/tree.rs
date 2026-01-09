@@ -188,28 +188,84 @@ impl CellTree {
         }
     }
 
-    pub fn collect_living(&self, current_idx: usize, out: &mut Vec<(i128, i128)>) {
+    pub fn collect_all_states(
+        &self,
+        current_mask: usize,
+        last_mask: usize,
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
         let root_lock = self.root.read().expect("Lock poisoned");
         if let Some(ref node) = *root_lock {
-            Self::collect_recursive(node, current_idx, out);
+            Self::collect_all_recursive(node, current_mask, last_mask, out);
         }
     }
 
-    fn collect_recursive(node: &CellNode, current_idx: usize, out: &mut Vec<(i128, i128)>) {
-        if node.cell.state(current_idx) == crate::cell::CellState::Alive {
-            out.push(node.cell.coordinates());
-        }
+    fn collect_all_recursive(
+        node: &CellNode,
+        current_mask: usize,
+        last_mask: usize,
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
+        out.push((
+            node.cell.coordinates(),
+            node.cell.presenter_view(current_mask, last_mask),
+        ));
 
         {
             let left_lock = node.left.read().expect("Lock poisoned");
             if let Some(ref left_node) = *left_lock {
-                Self::collect_recursive(left_node, current_idx, out);
+                Self::collect_all_recursive(left_node, current_mask, last_mask, out);
             }
         }
         {
             let right_lock = node.right.read().expect("Lock poisoned");
             if let Some(ref right_node) = *right_lock {
-                Self::collect_recursive(right_node, current_idx, out);
+                Self::collect_all_recursive(right_node, current_mask, last_mask, out);
+            }
+        }
+    }
+
+    pub fn collect_in_rect(
+        &self,
+        min: (i128, i128),
+        max: (i128, i128),
+        current_mask: usize,
+        last_mask: usize,
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
+        let root_lock = self.root.read().expect("Lock poisoned");
+        if let Some(ref node) = *root_lock {
+            Self::collect_in_rect_recursive(node, min, max, current_mask, last_mask, out);
+        }
+    }
+
+    fn collect_in_rect_recursive(
+        node: &CellNode,
+        min: (i128, i128),
+        max: (i128, i128),
+        current_mask: usize,
+        last_mask: usize,
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
+        let coords = node.cell.coordinates();
+
+        // Check if in rect
+        if coords.0 >= min.0 && coords.0 <= max.0 && coords.1 >= min.1 && coords.1 <= max.1 {
+            out.push((coords, node.cell.presenter_view(current_mask, last_mask)));
+        }
+
+        // Lexicographical pruning:
+        if Self::compare_coords(coords, min) == Ordering::Greater {
+            let left_lock = node.left.read().expect("Lock poisoned");
+            if let Some(ref left_node) = *left_lock {
+                Self::collect_in_rect_recursive(left_node, min, max, current_mask, last_mask, out);
+            }
+        }
+
+        if Self::compare_coords(coords, max) == Ordering::Less {
+            let right_lock = node.right.read().expect("Lock poisoned");
+            if let Some(ref right_node) = *right_lock {
+                Self::collect_in_rect_recursive(right_node, min, max, current_mask, last_mask, out);
             }
         }
     }
@@ -224,17 +280,17 @@ impl CellTree {
 }
 
 #[derive(Copy, Clone)]
-pub struct SendNodePtr(pub *const CellNode);
-unsafe impl Send for SendNodePtr {}
-unsafe impl Sync for SendNodePtr {}
+pub struct SendUnitPtr(pub *const CellNode);
+unsafe impl Send for SendUnitPtr {}
+unsafe impl Sync for SendUnitPtr {}
 
 #[derive(Copy, Clone)]
-pub struct SendNodeMutPtr(pub *mut CellNode);
-unsafe impl Send for SendNodeMutPtr {}
-unsafe impl Sync for SendNodeMutPtr {}
+pub struct SendUnitMutPtr(pub *mut CellNode);
+unsafe impl Send for SendUnitMutPtr {}
+unsafe impl Sync for SendUnitMutPtr {}
 
 /// A thread-safe wrapper for raw pointers to RwLock<Option<Box<CellNode>>>.
 #[derive(Copy, Clone)]
-pub struct SendLockPtr(pub *const RwLock<Option<Box<CellNode>>>);
-unsafe impl Send for SendLockPtr {}
-unsafe impl Sync for SendLockPtr {}
+pub struct SendLockUnitPtr(pub *const RwLock<Option<Box<CellNode>>>);
+unsafe impl Send for SendLockUnitPtr {}
+unsafe impl Sync for SendLockUnitPtr {}

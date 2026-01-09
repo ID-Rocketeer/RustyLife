@@ -6,12 +6,12 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 struct RustyLifeClientApp {
-    living_cells: Arc<Mutex<Vec<(i128, i128)>>>,
+    living_cells: Arc<Mutex<Vec<((i128, i128), u8)>>>,
     tx: mpsc::Sender<Request>,
 }
 
 impl RustyLifeClientApp {
-    fn new(living_cells: Arc<Mutex<Vec<(i128, i128)>>>, tx: mpsc::Sender<Request>) -> Self {
+    fn new(living_cells: Arc<Mutex<Vec<((i128, i128), u8)>>>, tx: mpsc::Sender<Request>) -> Self {
         Self { living_cells, tx }
     }
 }
@@ -22,10 +22,18 @@ impl eframe::App for RustyLifeClientApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("RustyLife Standalone Client (Sparse)");
-            ui.label(format!("Living Cells: {}", cells.len()));
+            ui.label(format!("Living Cells (incl. traces): {}", cells.len()));
             if ui.button("Next Step").clicked() {
                 let _ = self.tx.try_send(Request::NextStep);
             }
+
+            let born = cells.iter().filter(|(_, s)| *s == 0b10).count();
+            let stable = cells.iter().filter(|(_, s)| *s == 0b11).count();
+            let dying = cells.iter().filter(|(_, s)| *s == 0b01).count();
+            ui.label(format!(
+                "Stable Alive: {}, NewBorn: {}, Dying: {}",
+                stable, born, dying
+            ));
         });
 
         ctx.request_repaint();

@@ -36,26 +36,33 @@ pub struct Args {
 
 /// Broadcasts the current living cell coordinates to all subscribers.
 pub struct ServerEngineSubscriber {
-    engine: Arc<SimulationEngine>,
-    tx: broadcast::Sender<Vec<(i128, i128)>>,
+    pub engine: Arc<SimulationEngine>,
+    pub tx: broadcast::Sender<Vec<((i128, i128), u8)>>,
 }
 
 impl EngineSubscriber for ServerEngineSubscriber {
     fn notify_and_wait(&self) -> bool {
-        let living = self.engine.space.collect_living();
-        let _ = self.tx.send(living);
+        let guard = self.engine.space.index.read();
+        let current_mask = guard.current_state_mask();
+        let last_mask = guard.last_state_mask();
+
+        let mut all_cells = Vec::new();
+        for bucket in &self.engine.space.storage.buckets {
+            bucket.collect_all_states(current_mask, last_mask, &mut all_cells);
+        }
+        let _ = self.tx.send(all_cells);
         true
     }
 }
 
 struct AppStateEnv {
     engine: Arc<SimulationEngine>,
-    tx: broadcast::Sender<Vec<(i128, i128)>>,
+    tx: broadcast::Sender<Vec<((i128, i128), u8)>>,
 }
 
 struct RustyLifeGui {
-    living_cells: Vec<(i128, i128)>,
-    state_rx: broadcast::Receiver<Vec<(i128, i128)>>,
+    living_cells: Vec<((i128, i128), u8)>,
+    state_rx: broadcast::Receiver<Vec<((i128, i128), u8)>>,
     engine: Arc<SimulationEngine>,
 }
 
@@ -77,10 +84,22 @@ impl eframe::App for RustyLifeGui {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("RustyLife Native GUI (Integrated - Sparse)");
-            ui.label(format!("Living Cells: {}", self.living_cells.len()));
+            ui.label(format!(
+                "Living Cells (incl. traces): {}",
+                self.living_cells.len()
+            ));
             if ui.button("Step").clicked() {
                 self.engine.step();
             }
+
+            // Simple visualization list or status
+            let born = self.living_cells.iter().filter(|(_, s)| *s == 0b10).count();
+            let stable = self.living_cells.iter().filter(|(_, s)| *s == 0b11).count();
+            let dying = self.living_cells.iter().filter(|(_, s)| *s == 0b01).count();
+            ui.label(format!(
+                "Stable: {}, NewBorn: {}, Dying: {}",
+                stable, born, dying
+            ));
         });
 
         ctx.request_repaint();
@@ -92,8 +111,8 @@ async fn main() {
     let args = Args::parse();
 
     let space = Arc::new(SimulationSpace::new());
-    let engine = Arc::new(SimulationEngine::new(space));
-    let (tx, _rx) = broadcast::channel::<Vec<(i128, i128)>>(100);
+    let engine = SimulationEngine::new(space);
+    let (tx, _rx) = broadcast::channel::<Vec<((i128, i128), u8)>>(100);
 
     let shared_state = Arc::new(AppStateEnv {
         engine: engine.clone(),
@@ -180,6 +199,12 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 // Already being broadcasted or on-demand?
                                 // Let's send current state immediately.
                             }
+                            Request::Start => {
+                                state.engine.start();
+                            }
+                            Request::Stop => {
+                                state.engine.stop();
+                            }
                         }
                     }
                 } else {
@@ -214,6 +239,8 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                             Request::NextStep => { state.engine.step(); }
                             Request::Reset => { /* Reset engine */ }
                             Request::GetState => { /* Send current */ }
+                            Request::Start => { state.engine.start(); }
+                            Request::Stop => { state.engine.stop(); }
                         }
                     }
                     line.clear();

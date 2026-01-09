@@ -1,6 +1,6 @@
 use crate::cell::Cell;
 use crate::hash::hash_coordinates;
-use crate::state::{IndexGuard, SimulationIndex};
+use crate::state::{MaskGuard, SimulationMasks};
 use crate::tree::CellTree;
 
 /// Sparse storage using 256 buckets, each holding a BST of Cells.
@@ -37,29 +37,47 @@ impl SparseStorage {
         self.buckets[idx].find_or_create_and_apply((x, y), creator, f)
     }
 
-    pub fn collect_living(&self, current_idx: usize, out: &mut Vec<(i128, i128)>) {
+    pub fn collect_all_states(
+        &self,
+        current_mask: usize,
+        last_mask: usize,
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
         for bucket in &self.buckets {
-            bucket.collect_living(current_idx, out);
+            bucket.collect_all_states(current_mask, last_mask, out);
+        }
+    }
+
+    pub fn collect_in_rect(
+        &self,
+        min: (i128, i128),
+        max: (i128, i128),
+        current_mask: usize,
+        last_mask: usize,
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
+        for bucket in &self.buckets {
+            bucket.collect_in_rect(min, max, current_mask, last_mask, out);
         }
     }
 }
 
-/// An arbitrary space that holds sparse cell data and is governed by a global simulation index.
+/// An arbitrary space that holds sparse cell data and is governed by a global simulation masks.
 pub struct SimulationSpace {
-    pub index: SimulationIndex,
+    pub index: SimulationMasks,
     pub storage: SparseStorage,
 }
 
 impl SimulationSpace {
     pub fn new() -> Self {
         Self {
-            index: SimulationIndex::new(),
+            index: SimulationMasks::new(),
             storage: SparseStorage::new(),
         }
     }
 
     /// Aquires a shared read lock for the space.
-    pub fn read(&self) -> IndexGuard<'_> {
+    pub fn read(&self) -> MaskGuard<'_> {
         self.index.read()
     }
 
@@ -68,12 +86,28 @@ impl SimulationSpace {
         self.index.flip()
     }
 
-    pub fn collect_living(&self) -> Vec<(i128, i128)> {
-        let guard = self.read();
-        let current_idx = guard.current();
-        let mut living = Vec::new();
-        self.storage.collect_living(current_idx, &mut living);
-        living
+    pub fn collect_all_states(&self) -> Vec<((i128, i128), u8)> {
+        let guard = self.index.read();
+        let current_mask = guard.current_state_mask();
+        let last_mask = guard.last_state_mask();
+        let mut all = Vec::new();
+        for bucket in &self.storage.buckets {
+            bucket.collect_all_states(current_mask, last_mask, &mut all);
+        }
+        all
+    }
+
+    pub fn collect_in_rect(
+        &self,
+        min: (i128, i128),
+        max: (i128, i128),
+        out: &mut Vec<((i128, i128), u8)>,
+    ) {
+        let guard = self.index.read();
+        let current_mask = guard.current_state_mask();
+        let last_mask = guard.last_state_mask();
+        self.storage
+            .collect_in_rect(min, max, current_mask, last_mask, out);
     }
 }
 
@@ -85,7 +119,7 @@ mod tests {
     #[test]
     fn test_sparse_storage_parallel_traits() {
         let storage = SparseStorage::new();
-        let manager = SimulationIndex::new();
+        let manager = SimulationMasks::new();
         let guard = manager.read();
 
         // We can now insert with a shared reference!
@@ -103,8 +137,8 @@ mod tests {
 
         {
             let guard = space.index.read();
-            let current = guard.current();
-            let _next = guard.next();
+            let current = guard.current_state_mask();
+            let _next = guard.next_state_mask();
 
             // Add a cell
             let cell = Cell::new(10, 10, CellState::Dead, &guard);
