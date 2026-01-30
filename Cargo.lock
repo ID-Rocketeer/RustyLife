@@ -2915,8 +2915,6 @@ dependencies = [
  "eframe",
  "egui",
  "rustylife-core",
- "serde",
- "serde_json",
  "tokio",
 ]
 
@@ -2925,8 +2923,7 @@ name = "rustylife-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "serde",
- "serde_json",
+ "crc32fast",
 ]
 
 [[package]]
@@ -2936,11 +2933,11 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "crc32fast",
  "eframe",
  "egui",
  "rustylife-core",
- "serde",
- "serde_json",
+ "tempfile",
  "tokio",
 ]
 

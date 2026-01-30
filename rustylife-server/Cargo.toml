@@ -8,9 +8,11 @@ rustylife-core = { path = "../rustylife-core" }
 clap = { version = "4.0", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
 axum = { version = "0.7", features = ["ws"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 anyhow = "1.0"
 egui = "0.28"
 eframe = "0.28"
+crc32fast = "1.5.0"
 # Removed interprocess
+
+[dev-dependencies]
+tempfile = "3.3"

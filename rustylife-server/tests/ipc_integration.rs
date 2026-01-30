@@ -1,6 +1,6 @@
 use std::process::{Child, Command};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -47,40 +47,43 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
     // Connect to IPC port
     println!("Connecting to IPC port...");
     let stream = timeout(Duration::from_secs(5), TcpStream::connect("127.0.0.1:9002")).await??;
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
+    let (mut reader, mut writer) = stream.into_split();
 
     // Trigger an update by sending NextStep
     println!("Sending NextStep command...");
     let req = rustylife_core::Request::NextStep;
-    let req_json = serde_json::to_string(&req)? + "\n";
-    timeout(
-        Duration::from_secs(5),
-        writer.write_all(req_json.as_bytes()),
-    )
-    .await??;
+    timeout(Duration::from_secs(5), writer.write_all(&req.to_bytes())).await??;
 
-    // Wait for push update (Count should be 0 because we haven't added any cells)
+    // Wait for push update (SnapshotAvailable 0x01)
     println!("Waiting for update (initial)...");
-    timeout(Duration::from_secs(5), reader.read_line(&mut line)).await??;
-    println!("Received: {}", line);
-    assert!(line.contains("\"State\":[]")); // Empty state initially
-    line.clear();
+    let mut resp_tag = [0u8; 1];
+    timeout(Duration::from_secs(5), reader.read_exact(&mut resp_tag)).await??;
+    assert_eq!(resp_tag[0], 0x01); // SnapshotAvailable tag
+
+    let mut gen_buf = [0u8; 8];
+    timeout(Duration::from_secs(5), reader.read_exact(&mut gen_buf)).await??;
+    let generation_count = u64::from_le_bytes(gen_buf);
+    println!(
+        "Received SnapshotAvailable for generation: {}",
+        generation_count
+    );
 
     // Trigger another step
     println!("Sending NextStep command (again)...");
-    timeout(
-        Duration::from_secs(5),
-        writer.write_all(req_json.as_bytes()),
-    )
-    .await??;
+    timeout(Duration::from_secs(5), writer.write_all(&req.to_bytes())).await??;
 
     // Wait for update
     println!("Waiting for update (after step)...");
-    timeout(Duration::from_secs(5), reader.read_line(&mut line)).await??;
-    println!("Received: {}", line);
-    assert!(line.contains("\"State\":[]")); // Still empty but received
+    timeout(Duration::from_secs(5), reader.read_exact(&mut resp_tag)).await??;
+    assert_eq!(resp_tag[0], 0x01);
+
+    timeout(Duration::from_secs(5), reader.read_exact(&mut gen_buf)).await??;
+    let generation_count_2 = u64::from_le_bytes(gen_buf);
+    println!(
+        "Received SnapshotAvailable for generation: {}",
+        generation_count_2
+    );
+    assert!(generation_count_2 > generation_count);
 
     Ok(())
 }

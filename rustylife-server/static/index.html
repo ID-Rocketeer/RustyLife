@@ -7,9 +7,9 @@
     <title>RustyLife Dashboard</title>
     <style>
         :root {
-            --primary: #f472b6;
-            --bg: #111827;
-            --card-bg: #1f2937;
+            --primary: #3b82f6;
+            --bg: #000000;
+            --card-bg: #111827;
             --text: #f9fafb;
         }
 
@@ -20,90 +20,181 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
             height: 100vh;
             margin: 0;
             overflow: hidden;
+            width: 100vw;
         }
 
         .container {
-            background: var(--card-bg);
-            padding: 3rem;
-            border-radius: 1.5rem;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            text-align: center;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+            box-sizing: border-box;
         }
 
         h1 {
-            font-size: 3rem;
+            font-size: 1.5rem;
             font-weight: 800;
-            margin-bottom: 1rem;
-            background: linear-gradient(to right, #f472b6, #fb923c);
+            margin: 0 0 0.5rem 0;
+            text-align: center;
+            background: linear-gradient(to right, #3b82f6, #10b981);
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
+        .header-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .generation-info {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
         .counter {
-            font-size: 5rem;
+            font-size: 1.25rem;
             font-weight: 900;
             font-variant-numeric: tabular-nums;
-            margin: 2rem 0;
             color: var(--text);
+            margin: 0;
+        }
+
+        .controls {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
         }
 
         button {
-            background: linear-gradient(135deg, #f472b6, #db2777);
+            background: #374151;
             color: white;
             border: none;
-            padding: 1rem 2.5rem;
-            font-size: 1.25rem;
-            font-weight: 600;
-            border-radius: 9999px;
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 10px 15px -3px rgba(244, 114, 182, 0.3);
-        }
-
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 20px 25px -5px rgba(244, 114, 182, 0.4);
-        }
-
-        button:active {
-            transform: translateY(0);
-        }
-
-        .status {
-            margin-top: 2rem;
+            padding: 0.5rem 1rem;
             font-size: 0.875rem;
+            font-weight: 600;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background: #4b5563;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.primary {
+            background: #3b82f6;
+        }
+
+        button.primary:hover:not(:disabled) {
+            background: #2563eb;
+        }
+
+        select {
+            background: #374151;
+            color: white;
+            border: none;
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        select:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .canvas-container {
+            flex: 1;
+            background: #000000;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.5rem;
+            overflow: hidden;
+            width: 100%;
+            display: flex;
+            /* Ensures canvas fills container if treated as flex item */
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+        }
+
+        .footer-status {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
             color: #9ca3af;
         }
 
         .dot {
             display: inline-block;
-            width: 8px;
-            height: 8px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             background: #ef4444;
-            margin-right: 0.5rem;
+            margin-right: 0.25rem;
         }
 
         .dot.connected {
             background: #10b981;
-            box-shadow: 0 0 10px #10b981;
+            box-shadow: 0 0 5px #10b981;
         }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h1>RustyLife</h1>
-        <div class="counter" id="count">0</div>
-        <button id="increment-btn">Increment</button>
-        <div class="status">
+        <div class="header-controls">
+            <div>
+                <h1>RustyLife</h1>
+                <div class="generation-info">Gen: <span id="generation">0</span></div>
+            </div>
+
+            <div class="controls">
+                <button id="run-btn" class="primary">Run</button>
+                <button id="step-btn">Step</button>
+                <button id="stop-btn">Stop</button>
+                <button id="reset-btn">Reset</button>
+                <select id="pattern-select">
+                    <option value="" disabled selected>Select Pattern...</option>
+                    <option value="glider">Glider</option>
+                    <option value="r-pentomino">R-Pentomino</option>
+                    <option value="glider gun">Glider Gun</option>
+                    <option value="spaceship">Spaceship</option>
+                    <option value="blinker">Blinker</option>
+                    <option value="block">Block</option>
+                    <option value="beehive">Beehive</option>
+                    <option value="breeder 1">Breeder 1</option>
+                </select>
+                <button id="zoom-in-btn">+</button>
+                <button id="zoom-out-btn">-</button>
+            </div>
+            <div class="counter" id="count">0</div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="sim-canvas"></canvas>
+        </div>
+
+        <div class="footer-status">
             <span id="status-dot" class="dot"></span>
             <span id="status-text">Disconnected</span>
         </div>
@@ -111,15 +202,177 @@
 
     <script>
         const countEl = document.getElementById('count');
-        const btn = document.getElementById('increment-btn');
+        const genEl = document.getElementById('generation');
+        const runBtn = document.getElementById('run-btn');
+        const stepBtn = document.getElementById('step-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const patternSelect = document.getElementById('pattern-select');
+        const zoomInBtn = document.getElementById('zoom-in-btn');
+        const zoomOutBtn = document.getElementById('zoom-out-btn');
+
         const statusDot = document.getElementById('status-dot');
         const statusText = document.getElementById('status-text');
+        const canvas = document.getElementById('sim-canvas');
+        const ctx = canvas.getContext('2d');
 
         let socket;
+        let scale = 10;
+        let isRunning = false;
+        let lastState = null;
+        let currentGen = 0n;
+
+        // Panning State
+        let offsetX = 0;
+        let offsetY = 0;
+        let isDragging = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+            canvas.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const dx = e.clientX - lastMouseX;
+                const dy = e.clientY - lastMouseY;
+                offsetX += dx;
+                offsetY += dy;
+                lastMouseX = e.clientX;
+                lastMouseY = e.clientY;
+                if (lastState) renderCells(lastState.data, lastState.offset);
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                canvas.style.cursor = 'default';
+                requestState();
+            }
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const delta = -Math.sign(e.deltaY);
+            updateZoom(delta);
+        }, { passive: false });
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            if (lastState) {
+                renderCells(lastState.data, lastState.offset);
+            }
+            requestState();
+        }
+        window.onresize = resizeCanvas;
+        resizeCanvas();
+
+        function renderCells(data, offset) {
+            lastState = { data, offset };
+
+            const gen = data.getBigUint64(offset, true);
+            currentGen = gen;
+            const total = data.getBigUint64(offset + 8, true);
+            isRunning = data.getUint8(offset + 16) === 1;
+            const recordCount = data.getBigUint64(offset + 17, true);
+
+            genEl.innerText = gen.toString();
+            countEl.innerText = total.toString();
+
+            runBtn.disabled = isRunning;
+            stopBtn.disabled = !isRunning;
+            resetBtn.disabled = isRunning;
+            stepBtn.disabled = isRunning;
+            patternSelect.disabled = isRunning;
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const centerX = canvas.width / 2 + offsetX;
+            const centerY = canvas.height / 2 + offsetY;
+            const size = scale <= 1 ? scale : scale - 1;
+
+            let recordsOffset = offset + 25;
+            for (let i = 0; i < Number(recordCount); i++) {
+                const x = Number(data.getBigInt64(recordsOffset, true));
+                const y = Number(data.getBigInt64(recordsOffset + 16, true));
+                const state = data.getUint8(recordsOffset + 32);
+                recordsOffset += 33;
+
+                let color;
+                switch (state) {
+                    case 0b11: color = '#3b82f6'; break;
+                    case 0b10: color = '#10b981'; break;
+                    case 0b01: color = '#ef4444'; break;
+                    default: continue;
+                }
+
+                ctx.fillStyle = color;
+                ctx.fillRect(centerX + x * scale, centerY + y * scale, size, size);
+            }
+        }
+
+        function sendRequest(tag, payload = null) {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+            let buf;
+            if (payload instanceof Uint8Array) {
+                buf = new Uint8Array(1 + payload.length);
+                buf[0] = tag;
+                buf.set(payload, 1);
+            } else {
+                buf = new Uint8Array([tag]);
+            }
+            socket.send(buf);
+        }
+
+        function requestState() {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+            // Construct Request::GetState (0x03)
+            const req = new ArrayBuffer(74);
+            const view = new DataView(req);
+            view.setUint8(0, 0x03);
+            view.setBigUint64(1, currentGen, true);
+            view.setUint8(9, 1); // Has Viewport
+
+            // Calculate visible bounds
+            const cx = canvas.width / 2 + offsetX;
+            const cy = canvas.height / 2 + offsetY;
+
+            const min_x = Math.floor((0 - cx) / scale) - 1;
+            const max_x = Math.ceil((canvas.width - cx) / scale) + 1;
+            const min_y = Math.floor((0 - cy) / scale) - 1;
+            const max_y = Math.ceil((canvas.height - cy) / scale) + 1;
+
+            setI128(view, 10, min_x);
+            setI128(view, 26, min_y);
+            setI128(view, 42, max_x);
+            setI128(view, 58, max_y);
+
+            socket.send(req);
+        }
+
+        function setI128(view, offset, val) {
+            const valBig = BigInt(val);
+            const low = valBig;
+            const high = valBig < 0n ? -1n : 0n; // Simple Sign Extension for Safe Integer range
+            view.setBigInt64(offset, low, true);
+            view.setBigInt64(offset + 8, high, true);
+        }
 
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            // Assuming localhost dev if host is empty/file
+            const host = window.location.host || 'localhost:8080';
+            socket = new WebSocket(`${protocol}//${host}/ws`);
+            socket.binaryType = 'arraybuffer';
 
             socket.onopen = () => {
                 statusDot.classList.add('connected');
@@ -127,8 +380,20 @@
             };
 
             socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                countEl.innerText = data.count;
+                const data = new DataView(event.data);
+                const tag = data.getUint8(0);
+
+                if (tag === 0x01) { // SnapshotAvailable
+                    const gen = data.getBigUint64(1, true);
+                    if (gen === 0n && currentGen !== 0n) {
+                        offsetX = 0;
+                        offsetY = 0;
+                    }
+                    currentGen = gen;
+                    requestState();
+                } else if (tag === 0x02) { // BinaryState
+                    renderCells(data, 9);
+                }
             };
 
             socket.onclose = () => {
@@ -138,11 +403,39 @@
             };
         }
 
-        btn.onclick = () => {
-            if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send('increment');
-            }
+        runBtn.onclick = () => sendRequest(0x04);
+        stepBtn.onclick = () => sendRequest(0x01);
+        stopBtn.onclick = () => sendRequest(0x05);
+        resetBtn.onclick = () => sendRequest(0x02);
+
+        patternSelect.onchange = (e) => {
+            const pattern = e.target.value;
+            if (!pattern) return;
+
+            const bytes = new TextEncoder().encode(pattern);
+            const payload = new Uint8Array(4 + bytes.length);
+            new DataView(payload.buffer).setUint32(0, bytes.length, true);
+            payload.set(bytes, 4);
+
+            sendRequest(0x06, payload);
+            patternSelect.value = "";
         };
+
+        function updateZoom(delta) {
+            scale = Math.max(1, Math.min(32, scale + delta));
+            if (lastState) {
+                renderCells(lastState.data, lastState.offset);
+            }
+            requestState();
+        }
+
+        zoomInBtn.onclick = () => updateZoom(1);
+        zoomOutBtn.onclick = () => updateZoom(-1);
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === '+' || e.key === '=') updateZoom(1);
+            if (e.key === '-') updateZoom(-1);
+        });
 
         connect();
     </script>
