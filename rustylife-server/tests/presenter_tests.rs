@@ -3,7 +3,6 @@ use rustylife_core::{
     engine::{EngineSubscriber, SimulationEngine},
     space::SimulationSpace,
 };
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 // Helper struct that we can use for testing within the test file
@@ -25,16 +24,10 @@ pub struct PresenterSubscriber {
 }
 
 impl EngineSubscriber for PresenterSubscriber {
-    fn on_snapshot_available(&self, path: PathBuf) -> bool {
-        if let Ok(buf) = std::fs::read(&path) {
-            if let Ok(packet) = rustylife_core::decode_binary_packet(&buf) {
-                let mut presenter = self.presenter.lock().unwrap();
-                presenter.update_state(packet);
-            } else {
-                // Failed to decode packet
-            }
-        } else {
-            // Failed to read file
+    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+        if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
+            let mut presenter = self.presenter.lock().unwrap();
+            presenter.update_state(packet);
         }
         true
     }
@@ -42,11 +35,8 @@ impl EngineSubscriber for PresenterSubscriber {
 
 #[test]
 fn test_presenter_receives_engine_snapshot() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let staging_dir = temp_dir.path().to_path_buf();
-
     let space = Arc::new(SimulationSpace::new(7));
-    let engine = SimulationEngine::new_with_staging(space.clone(), 1, staging_dir.clone());
+    let engine = SimulationEngine::new(space.clone(), 1);
 
     let presenter = Arc::new(Mutex::new(TestPresenter {
         received_packet: None,

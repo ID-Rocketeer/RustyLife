@@ -43,9 +43,17 @@ pub struct Args {
     #[arg(short, long, default_value_t = 9001)]
     pub ipc_port: u16,
 
-    /// Initial seed pattern (glider, blinker)
+    /// Initial seed pattern (glider, blinker, breeder 1)
     #[arg(short, long)]
     pub seed: Option<String>,
+
+    /// Number of generations to run before exiting (for profiling)
+    #[arg(long)]
+    pub generations: Option<u64>,
+
+    /// Automatically start the simulation after seeding
+    #[arg(long)]
+    pub autostart: bool,
 }
 
 /// Broadcasts only the generation number when a snapshot is ready.
@@ -55,15 +63,22 @@ pub struct ServerEngineSubscriber {
 }
 
 impl EngineSubscriber for ServerEngineSubscriber {
-    fn on_snapshot_available(&self, path: std::path::PathBuf) -> bool {
-        if path.exists() {
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name.starts_with("gen_") && file_name.ends_with(".bin") {
-                    if let Ok(generation_count) = file_name[4..file_name.len() - 4].parse::<u64>() {
-                        let _ = self.tx.send(generation_count);
-                    }
-                }
-            }
+    fn on_snapshot_available(&self, generation: u64, _data: Arc<Vec<u8>>) -> bool {
+        let _ = self.tx.send(generation);
+        true
+    }
+}
+
+/// A subscriber that exits the process after reaching a target generation.
+pub struct BenchmarkSubscriber {
+    pub target_generation: u64,
+}
+
+impl EngineSubscriber for BenchmarkSubscriber {
+    fn on_snapshot_available(&self, generation: u64, _data: Arc<Vec<u8>>) -> bool {
+        if generation >= self.target_generation {
+            println!("Reached target generation {}. Exiting...", generation);
+            std::process::exit(0);
         }
         true
     }
@@ -75,26 +90,22 @@ pub struct PresenterSubscriber {
 }
 
 impl EngineSubscriber for PresenterSubscriber {
-    fn on_snapshot_available(&self, path: std::path::PathBuf) -> bool {
-        if let Ok(buf) = std::fs::read(&path) {
-            if let Ok(mut packet) = rustylife_core::decode_binary_packet(&buf) {
-                let mut presenter = self.presenter.lock().unwrap();
+    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+        if let Ok(mut packet) = rustylife_core::decode_binary_packet(&data) {
+            let mut presenter = self.presenter.lock().unwrap();
 
-                // Filter based on Presenter's viewport
-                if let Some(((min_x, min_y), (max_x, max_y))) = presenter.get_viewport() {
-                    let filtered: Vec<_> = packet
-                        .cells
-                        .into_iter()
-                        .filter(|((x, y), _)| {
-                            *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y
-                        })
-                        .collect();
-                    packet.cells = filtered;
-                    packet.record_count = packet.cells.len() as u64;
-                }
-
-                presenter.update_state(packet);
+            // Filter based on Presenter's viewport
+            if let Some(((min_x, min_y), (max_x, max_y))) = presenter.get_viewport() {
+                let filtered: Vec<_> = packet
+                    .cells
+                    .into_iter()
+                    .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                    .collect();
+                packet.cells = filtered;
+                packet.record_count = packet.cells.len() as u64;
             }
+
+            presenter.update_state(packet);
         }
         true
     }
@@ -103,6 +114,7 @@ impl EngineSubscriber for PresenterSubscriber {
 struct AppStateEnv {
     engine: Arc<SimulationEngine>,
     tx: broadcast::Sender<u64>,
+    shutdown_tx: broadcast::Sender<()>,
 }
 
 struct RustyLifeGuiState {
@@ -189,6 +201,18 @@ impl eframe::App for RustyLifeGui {
 
                 ui.separator();
 
+                ui.add_space(8.0);
+                if ui
+                    .add(egui::Button::new("Quit").fill(egui::Color32::from_rgb(153, 27, 27)))
+                    .on_hover_text("Shutdown server")
+                    .clicked()
+                {
+                    self.engine.stop();
+                    std::process::exit(0);
+                }
+
+                ui.add_space(8.0);
+
                 ui.add_enabled_ui(!is_running, |ui| {
                     egui::ComboBox::from_label("Patterns")
                         .selected_text("Select Pattern...")
@@ -237,10 +261,20 @@ impl eframe::App for RustyLifeGui {
             let stable = cells.iter().filter(|(_, s)| *s == 0b11).count();
             let dying = cells.iter().filter(|(_, s)| *s == 0b01).count();
 
-            ui.label(format!(
-                "Alive: {}, NewlyBorn: {}, Dying: {}",
-                stable, born, dying
-            ));
+            let total = stable + born + dying;
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{}", total))
+                        .color(egui::Color32::WHITE)
+                        .strong(),
+                );
+                ui.label("Cells");
+                ui.add_space(10.0);
+                ui.label(format!(
+                    "(Stable: {}, Born: {}, Dying: {})",
+                    stable, born, dying
+                ));
+            });
 
             ui.separator();
 
@@ -377,14 +411,27 @@ fn main() {
         None
     };
 
-    // Initial Seeding
+    // Initial Seeding and Benchmarking
+    if let Some(target) = args.generations {
+        println!("Profiling mode: Running for {} generations.", target);
+        engine.add_subscriber(Arc::new(BenchmarkSubscriber {
+            target_generation: target,
+        }));
+    }
+
     if let Some(pattern) = args.seed {
         engine.seed(pattern);
+        if args.generations.is_some() || args.autostart {
+            engine.start();
+        }
     }
+
+    let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
 
     let shared_state = Arc::new(AppStateEnv {
         engine: engine.clone(),
         tx: tx.clone(),
+        shutdown_tx: shutdown_tx.clone(),
     });
 
     // Spawn the server stack in the background
@@ -433,9 +480,8 @@ fn main() {
     } else {
         // Just wait for the background runtime
         println!("Running in headless mode. Press Ctrl+C to stop.");
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(3600));
-        }
+        let _ = rt.block_on(async { shutdown_rx.recv().await });
+        println!("Shutdown requested. Exiting...");
     }
 }
 
@@ -452,6 +498,7 @@ async fn ws_handler(
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
     let mut rx = state.tx.subscribe();
+    let mut shutdown_rx = state.shutdown_tx.subscribe();
 
     // Send the current generation immediately so the client can sync up
     let current_gen = state.engine.generation();
@@ -483,11 +530,17 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                             Request::Seed(pattern) => {
                                 state.engine.seed(pattern);
                             }
+                            Request::Shutdown => {
+                                let _ = state.shutdown_tx.send(());
+                            }
                         }
                     }
                 } else {
                     break;
                 }
+            }
+            _ = shutdown_rx.recv() => {
+                break;
             }
             result = rx.recv() => {
                 if let Ok(generation) = result {
@@ -505,6 +558,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut rx = state.tx.subscribe();
+    let mut shutdown_rx = state.shutdown_tx.subscribe();
 
     // Send the current generation immediately so the client can sync up
     let current_gen = state.engine.generation();
@@ -553,6 +607,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                         let pattern = String::from_utf8_lossy(&payload).to_string();
                         Some(Request::Seed(pattern))
                     }
+                    0x07 => Some(Request::Shutdown),
                     _ => None,
                 };
 
@@ -568,8 +623,14 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                         Request::Start => { state.engine.start(); }
                         Request::Stop => { state.engine.stop(); }
                         Request::Seed(pattern) => { state.engine.seed(pattern); }
+                        Request::Shutdown => {
+                            let _ = state.shutdown_tx.send(());
+                        }
                     }
                 }
+            }
+            _ = shutdown_rx.recv() => {
+                break;
             }
             result = rx.recv() => {
                 if let Ok(generation) = result {
@@ -589,69 +650,64 @@ async fn handle_get_state(
     generation: u64,
     viewport: Option<((i128, i128), (i128, i128))>,
 ) -> Response {
-    let path = state
-        .engine
-        .staging_dir
-        .join(format!("gen_{}.bin", generation));
-    if !path.exists() {
-        return Response::Error(format!("Snapshot for generation {} not found", generation));
+    let snapshot = state.engine.snapshots.get(generation);
+
+    if snapshot.is_none() {
+        return Response::Error(format!(
+            "Snapshot for generation {} not found in memory (too old or not yet generated)",
+            generation
+        ));
     }
 
-    match std::fs::read(&path) {
-        Ok(mut buf) => {
-            if viewport.is_none() {
-                // OPTIMIZATION: Zero-Copy Path
-                // If the client wants the full universe (no viewport), we can skip the expensive
-                // Decode -> Filter -> Encode cycle. We just need to patch the 'is_running' byte
-                // (offset 16) and recompute the CRC.
-                if buf.len() > 16 + 4 {
-                    let is_running = !state.engine.is_stopped();
-                    buf[16] = if is_running { 1 } else { 0 };
+    let data = snapshot.unwrap();
+    if viewport.is_none() {
+        // OPTIMIZATION: Zero-Copy Path
+        // We need to patch 'is_running' in our local-ish copy.
+        // Since we want to avoid mutating the master Arc, we'll clone the vec if it needs patching.
+        let mut buf = (*data).clone();
+        if buf.len() > 16 + 4 {
+            let is_running = !state.engine.is_stopped();
+            buf[16] = if is_running { 1 } else { 0 };
 
-                    // Recalculate CRC for the patched buffer
-                    let len = buf.len();
-                    let payload = &buf[0..len - 4];
-                    let new_crc = crc32fast::hash(payload);
-                    let crc_bytes = new_crc.to_le_bytes();
+            // Recalculate CRC
+            let len = buf.len();
+            let payload = &buf[0..len - 4];
+            let new_crc = crc32fast::hash(payload);
+            let crc_bytes = new_crc.to_le_bytes();
 
-                    // Update CRC at the end
-                    buf[len - 4] = crc_bytes[0];
-                    buf[len - 3] = crc_bytes[1];
-                    buf[len - 2] = crc_bytes[2];
-                    buf[len - 1] = crc_bytes[3];
-                }
-                Response::BinaryState(buf)
-            } else {
-                // Legacy Path: Viewport Filtering
-                // We must decode, filter the cells, and re-encode.
-                match rustylife_core::decode_binary_packet(&buf) {
-                    Ok(packet) => {
-                        let filtered_cells: Vec<_> =
-                            if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                                packet
-                                    .cells
-                                    .into_iter()
-                                    .filter(|((x, y), _)| {
-                                        *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y
-                                    })
-                                    .collect()
-                            } else {
-                                packet.cells
-                            };
-
-                        let is_running = !state.engine.is_stopped();
-                        let response_packet = rustylife_core::encode_binary_packet(
-                            packet.generation,
-                            packet.total_cells,
-                            is_running,
-                            &filtered_cells,
-                        );
-                        Response::BinaryState(response_packet)
-                    }
-                    Err(e) => Response::Error(format!("Failed to decode snapshot: {}", e)),
-                }
-            }
+            buf[len - 4] = crc_bytes[0];
+            buf[len - 3] = crc_bytes[1];
+            buf[len - 2] = crc_bytes[2];
+            buf[len - 1] = crc_bytes[3];
         }
-        Err(e) => Response::Error(format!("Failed to read snapshot file: {}", e)),
+        Response::BinaryState(buf)
+    } else {
+        // Viewport Filtering (In Memory)
+        match rustylife_core::decode_binary_packet(&data) {
+            Ok(packet) => {
+                let filtered_cells: Vec<_> =
+                    if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                        packet
+                            .cells
+                            .into_iter()
+                            .filter(|((x, y), _)| {
+                                *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y
+                            })
+                            .collect()
+                    } else {
+                        packet.cells
+                    };
+
+                let is_running = !state.engine.is_stopped();
+                let response_packet = rustylife_core::encode_binary_packet(
+                    packet.generation,
+                    packet.total_cells,
+                    is_running,
+                    &filtered_cells,
+                );
+                Response::BinaryState(response_packet)
+            }
+            Err(e) => Response::Error(format!("Failed to decode memory snapshot: {}", e)),
+        }
     }
 }

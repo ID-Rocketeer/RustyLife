@@ -130,68 +130,6 @@ impl CellTree {
         }
     }
 
-    /// Optimized mutation for Stage 2 (Consolidation).
-    /// Uses get_mut() to bypass atomic locks entirely.
-    /// SAFETY: Must only be called when this thread has exclusive access to the CellTree.
-
-    pub fn merge_and_rebuild(&mut self, sorted_coords: &[(i128, i128)], current_mask: usize) {
-        let mut old_nodes_vec = Vec::new();
-        if let Some(root) = self.root.take() {
-            Self::flatten_recursive(root, &mut old_nodes_vec);
-        }
-
-        let mut merged = Vec::with_capacity(old_nodes_vec.len().max(sorted_coords.len()));
-        let mut ni_iter = old_nodes_vec.into_iter().peekable();
-        let mut ci = 0;
-
-        while ni_iter.peek().is_some() || ci < sorted_coords.len() {
-            if let Some(node) = ni_iter.peek() {
-                if ci < sorted_coords.len() {
-                    let n_coords = node.cell.coordinates();
-                    let c_coords = sorted_coords[ci];
-
-                    match Self::compare_coords(n_coords, c_coords) {
-                        Ordering::Less => {
-                            let n = ni_iter.next().unwrap();
-                            if !n.cell.is_permanently_dead() {
-                                merged.push(Some(n));
-                            }
-                        }
-                        Ordering::Greater => {
-                            merged.push(Some(Box::new(CellNode::new(Cell::new(
-                                c_coords.0,
-                                c_coords.1,
-                                crate::cell::CellState::Dead,
-                                current_mask,
-                            )))));
-                            ci += 1;
-                        }
-                        Ordering::Equal => {
-                            merged.push(Some(ni_iter.next().unwrap()));
-                            ci += 1;
-                        }
-                    }
-                } else {
-                    let n = ni_iter.next().unwrap();
-                    if !n.cell.is_permanently_dead() {
-                        merged.push(Some(n));
-                    }
-                }
-            } else {
-                let c_coords = sorted_coords[ci];
-                merged.push(Some(Box::new(CellNode::new(Cell::new(
-                    c_coords.0,
-                    c_coords.1,
-                    crate::cell::CellState::Dead,
-                    current_mask,
-                )))));
-                ci += 1;
-            }
-        }
-
-        self.root = Self::build_balanced(&mut merged);
-    }
-
     /// Applies updates to the tree in a batch using a sorted list of coordinates.
     /// This is an O(N + M) operation where N is tree size and M is number of updates.
     /// It effectively rebuilds the tree, creating new nodes where necessary.
@@ -279,33 +217,6 @@ impl CellTree {
         new_node.right = Self::build_from_coords(&coords[end..], creator, applicator);
 
         Some(new_node)
-    }
-
-    fn flatten_recursive(mut node: Box<CellNode>, out: &mut Vec<Box<CellNode>>) {
-        if let Some(left) = node.left.take() {
-            Self::flatten_recursive(left, out);
-        }
-        let right = node.right.take();
-        out.push(node);
-        if let Some(r) = right {
-            Self::flatten_recursive(r, out);
-        }
-    }
-
-    fn build_balanced(nodes: &mut [Option<Box<CellNode>>]) -> Option<Box<CellNode>> {
-        if nodes.is_empty() {
-            return None;
-        }
-        let mid = nodes.len() / 2;
-        let mut node = nodes[mid].take().unwrap();
-
-        let (left_part, right_part) = nodes.split_at_mut(mid);
-        let right_part = &mut right_part[1..];
-
-        node.left = Self::build_balanced(left_part);
-        node.right = Self::build_balanced(right_part);
-
-        Some(node)
     }
 
     // This function is now redundant with find_or_create_recursive,
@@ -485,6 +396,44 @@ impl CellTree {
         }
         if let Some(ref right) = node.right {
             Self::reset_counts_recursive(right, mask);
+        }
+    }
+
+    /// Unified commit and prune: calculates next state, notifies observer, and prunes if perma-dead.
+    /// This is the "natural pruning" integrated into the simulation cycle.
+    pub fn commit_and_prune<F>(&mut self, cur: usize, next: usize, last: usize, mut observer: F)
+    where
+        F: FnMut(&Cell, crate::cell::CellState),
+    {
+        Self::commit_and_prune_recursive(&mut self.root, cur, next, last, &mut observer);
+    }
+
+    fn commit_and_prune_recursive<F>(
+        node_opt: &mut Option<Box<CellNode>>,
+        cur: usize,
+        next: usize,
+        last: usize,
+        observer: &mut F,
+    ) where
+        F: FnMut(&Cell, crate::cell::CellState),
+    {
+        if let Some(mut node) = node_opt.take() {
+            // 1. Recurse first to maintain tree structure during potential deletion
+            Self::commit_and_prune_recursive(&mut node.left, cur, next, last, observer);
+            Self::commit_and_prune_recursive(&mut node.right, cur, next, last, observer);
+
+            // 2. Calculate next state
+            let next_state = node.cell.calculate_next_state(cur, next);
+
+            // 3. Notify observer (for counters)
+            observer(&node.cell, next_state);
+
+            // 4. Natural Pruning: Remove if dead in all 3 generations
+            if node.cell.is_permanently_dead() {
+                *node_opt = node.delete();
+            } else {
+                *node_opt = Some(node);
+            }
         }
     }
 

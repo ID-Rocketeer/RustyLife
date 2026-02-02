@@ -23,8 +23,8 @@ struct GenerationTracker {
 }
 
 impl EngineSubscriber for GenerationTracker {
-    fn on_snapshot_available(&self, path: std::path::PathBuf) -> bool {
-        if !path.exists() {
+    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+        if data.is_empty() {
             return true;
         }
 
@@ -133,17 +133,8 @@ fn run_benchmark(
     workload: &dyn Workload,
     deadline: Option<Duration>,
 ) -> BenchmarkStatus {
-    let unique_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let staging_dir = std::env::current_dir()
-        .unwrap()
-        .join(format!("staging_test_{}", unique_id));
-
     let space = Arc::new(SimulationSpace::new(bucket_count));
-    let engine =
-        SimulationEngine::new_with_staging(Arc::clone(&space), pool_size, staging_dir.clone());
+    let engine = SimulationEngine::new(Arc::clone(&space), pool_size);
     workload.setup(&space);
 
     let (tx, rx) = mpsc::channel();
@@ -165,9 +156,6 @@ fn run_benchmark(
 
     engine.shutdown();
     let elapsed = start.elapsed();
-
-    // Best-effort cleanup of unique staging directory
-    let _ = std::fs::remove_dir_all(&staging_dir);
 
     let gens_done = tracker.current.load(Ordering::SeqCst);
     let ratio = gens_done as f64 / workload.target_generations() as f64;
@@ -538,7 +526,7 @@ fn tune_buckets(
 
 #[test]
 #[ignore]
-fn test_auto_tuning_heavy() {
+fn test_tuning_heavy_workload_discovery() {
     run_tuning_process(&StressTest {
         count: 10,
         spacing: 555,
@@ -547,6 +535,6 @@ fn test_auto_tuning_heavy() {
 
 #[test]
 #[ignore]
-fn test_auto_tuning_rpentomino() {
+fn test_tuning_rpentomino_workload_discovery() {
     run_tuning_process(&RPentomino);
 }

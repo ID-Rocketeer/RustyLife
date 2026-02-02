@@ -41,6 +41,8 @@ pub enum Request {
     Reset,
     /// Seeds the simulation with a named pattern.
     Seed(String),
+    /// Gracefully shuts down the simulation server.
+    Shutdown,
 }
 
 impl Request {
@@ -74,6 +76,7 @@ impl Request {
                 buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
                 buf.extend_from_slice(bytes);
             }
+            Request::Shutdown => buf.push(0x07),
         }
         buf
     }
@@ -121,6 +124,7 @@ impl Request {
                 let pattern = String::from_utf8_lossy(&buf[5..5 + len]).to_string();
                 Ok(Request::Seed(pattern))
             }
+            0x07 => Ok(Request::Shutdown),
             _ => Err(format!("Unknown Request tag: 0x{:02x}", buf[0])),
         }
     }

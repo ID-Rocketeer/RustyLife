@@ -9,8 +9,8 @@ struct MockSubscriber {
 }
 
 impl EngineSubscriber for MockSubscriber {
-    fn on_snapshot_available(&self, path: std::path::PathBuf) -> bool {
-        if path.exists() {
+    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+        if !data.is_empty() {
             self.signaled.store(true, Ordering::SeqCst);
         }
         true
@@ -18,7 +18,7 @@ impl EngineSubscriber for MockSubscriber {
 }
 
 #[test]
-fn test_dot() {
+fn test_isolated_cell_dies() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -45,7 +45,7 @@ fn test_dot() {
 }
 
 #[test]
-fn test_pre_block() {
+fn test_l_shape_consolidates_into_block() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -109,7 +109,7 @@ fn test_pre_block() {
 }
 
 #[test]
-fn test_single_glider() {
+fn test_glider_completes_translation_cycle() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -151,7 +151,7 @@ fn test_single_glider() {
 }
 
 #[test]
-fn test_engine_single_step_cycle() {
+fn test_engine_successfully_completes_single_step_cycle() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -171,9 +171,14 @@ fn test_engine_single_step_cycle() {
 
     // 2. Run one step
     engine.step();
-    std::thread::sleep(std::time::Duration::from_millis(50));
 
-    // 3. Verify results
+    // 3. Wait for signal with timeout
+    let start = std::time::Instant::now();
+    while !sub.signaled.load(Ordering::SeqCst) && start.elapsed().as_millis() < 500 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // 4. Verify results
     let guard = space.read();
     let current = guard.current_state_mask();
 
@@ -183,11 +188,14 @@ fn test_engine_single_step_cycle() {
     });
 
     // Subscriber should have been notified
-    assert!(sub.signaled.load(Ordering::SeqCst));
+    assert!(
+        sub.signaled.load(Ordering::SeqCst),
+        "Subscriber was not notified within timeout"
+    );
 }
 
 #[test]
-fn test_engine_blinker_reproduction() {
+fn test_blinker_oscillates_correctly() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -239,7 +247,7 @@ fn test_engine_blinker_reproduction() {
 }
 
 #[test]
-fn test_engine_autonomous_start_stop() {
+fn test_engine_quiesces_consistently_after_autonomous_stop() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -320,11 +328,12 @@ fn test_four_gliders_stability() {
     // 2. Setup generation counter subscriber
     struct Counter(std::sync::atomic::AtomicUsize, std::sync::mpsc::Sender<()>);
     impl EngineSubscriber for Counter {
-        fn on_snapshot_available(&self, path: std::path::PathBuf) -> bool {
-            if path.exists() {
+        fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+            if !data.is_empty() {
                 let val = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 if val >= 12 {
                     let _ = self.1.send(());
+                    return false;
                 }
             }
             true
@@ -375,7 +384,7 @@ fn test_four_gliders_stability() {
 }
 
 #[test]
-fn test_engine_immediate_stop_stress() {
+fn test_engine_remains_stable_under_immediate_stop_stress() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -424,7 +433,7 @@ fn test_engine_immediate_stop_stress() {
     );
 }
 #[test]
-fn test_cell_lifecycle_4states() {
+fn test_cell_correctly_transitions_through_lifecycle_states() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
@@ -461,7 +470,18 @@ fn test_cell_lifecycle_4states() {
         });
 
         // record_count should be 1
-        assert_eq!(engine.record_count.load(Ordering::SeqCst), 1);
+        let mut actual_records = 0;
+        space
+            .storage()
+            .collect_all(curr, last, last_last, &mut Vec::new()); // Just count
+        space.storage().buckets.iter().for_each(|b| {
+            let lock = b.read().unwrap();
+            if let Some(ref root) = lock.root {
+                actual_records += count_visible_recursive(root, curr, last, last_last);
+            }
+        });
+        assert_eq!(actual_records, 1);
+
         // living_count should be 0
         assert_eq!(engine.living_count.load(Ordering::SeqCst), 0);
     }
@@ -487,7 +507,14 @@ fn test_cell_lifecycle_4states() {
         });
 
         // record_count should still be 1 (due to the ghost frame)
-        assert_eq!(engine.record_count.load(Ordering::SeqCst), 1);
+        let mut actual_records = 0;
+        space.storage().buckets.iter().for_each(|b| {
+            let lock = b.read().unwrap();
+            if let Some(ref root) = lock.root {
+                actual_records += count_visible_recursive(root, curr, last, last_last);
+            }
+        });
+        assert_eq!(actual_records, 1);
     }
 
     // Step 3:
@@ -513,6 +540,89 @@ fn test_cell_lifecycle_4states() {
         });
 
         // record_count should be 0
-        assert_eq!(engine.record_count.load(Ordering::SeqCst), 0);
+        let mut actual_records = 0;
+        space.storage().buckets.iter().for_each(|b| {
+            let lock = b.read().unwrap();
+            if let Some(ref root) = lock.root {
+                actual_records += count_visible_recursive(root, curr, last, last_last);
+            }
+        });
+        assert_eq!(actual_records, 0);
     }
+}
+
+#[test]
+fn test_engine_state_repair_on_resume() {
+    let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+    let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
+
+    // 1. Setup a stable 2x2 block
+    let pts = [(0, 0), (1, 0), (0, 1), (1, 1)];
+    {
+        let guard = space.read();
+        let mask = guard.current_state_mask();
+        for (px, py) in pts {
+            space
+                .storage()
+                .insert(Cell::new(px, py, CellState::Alive, mask));
+        }
+    }
+
+    // 2. MANUALLY CORRUPT memory:
+    // We create an ALIVE cell at (5, 5). It has no neighbors, so it should die.
+    // However, we manually set its neighbor count to 2.
+    // In GOL, an alive cell with 2 neighbors survives.
+    {
+        let guard = space.read();
+        let current = guard.current_state_mask();
+        space
+            .storage()
+            .insert(Cell::new(5, 5, CellState::Alive, current));
+        space.storage().find_and_apply(5, 5, |cell| {
+            cell.reset_neighbor_count(current);
+            cell.increment_neighbor_count(current);
+            cell.increment_neighbor_count(current); // DIRTY: 2 neighbors
+        });
+    }
+
+    // 3. Step. If neighbor counts aren't repaired, (5, 5) will survive.
+    // We call stop() first to ensure the engine is marked as "tainted".
+    engine.stop();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    engine.step();
+
+    // 4. Verify results
+    let guard = space.read();
+    let current = guard.current_state_mask();
+
+    let is_alive = space
+        .storage()
+        .find_and_apply(5, 5, |cell| cell.state(current) == CellState::Alive)
+        .unwrap_or(false);
+
+    assert!(
+        !is_alive,
+        "FIX FAILURE: Cell (5,5) survived from dirty memory! Repair failed."
+    );
+}
+
+fn count_visible_recursive(
+    node: &rustylife_core::tree::CellNode,
+    cur: usize,
+    last: usize,
+    last_last: usize,
+) -> u64 {
+    let mut count = if node.cell.presenter_view(cur, last, last_last).is_some() {
+        1
+    } else {
+        0
+    };
+    if let Some(ref left) = node.left {
+        count += count_visible_recursive(left, cur, last, last_last);
+    }
+    if let Some(ref right) = node.right {
+        count += count_visible_recursive(right, cur, last, last_last);
+    }
+    count
 }

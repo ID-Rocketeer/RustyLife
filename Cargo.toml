@@ -1,7 +1,6 @@
 [workspace]
-members = [
-    "rustylife-core",
-    "rustylife-server",
-    "rustylife-client",
-]
+members = ["rustylife-core", "rustylife-server", "rustylife-client"]
 resolver = "2"
+
+[profile.release]
+debug = true

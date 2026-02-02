@@ -13,8 +13,8 @@ struct GenerationTracker {
 }
 
 impl EngineSubscriber for GenerationTracker {
-    fn on_snapshot_available(&self, path: std::path::PathBuf) -> bool {
-        if path.exists() {
+    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+        if !data.is_empty() {
             let prev = self.current.fetch_add(1, Ordering::SeqCst);
             if prev + 1 >= self.target {
                 let _ = self.tx.send(());
@@ -87,7 +87,7 @@ fn run_r_pentomino_test(pool_size: usize, bucket_count: usize) {
 }
 
 #[test]
-fn test_r_pentomino_evolution() {
+fn test_r_pentomino_stabilizes_after_long_evolution() {
     let pool_size = std::env::var("RUSTYLIFE_POOL_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())

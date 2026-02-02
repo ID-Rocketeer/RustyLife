@@ -47,29 +47,45 @@
         }
 
         .header-controls {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: 200px 1fr 200px;
             align-items: center;
             margin-bottom: 0.5rem;
-            flex-wrap: wrap;
-            gap: 0.5rem;
+            gap: 1rem;
+            width: 100%;
         }
 
-        .generation-info {
-            font-size: 1rem;
+        .header-controls>div:first-child {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .generation-info,
+        .population-info {
+            font-size: 0.875rem;
             font-weight: 600;
+            color: #9ca3af;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
         }
 
-        .counter {
-            font-size: 1.25rem;
-            font-weight: 900;
-            font-variant-numeric: tabular-nums;
+        .population-info {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        #generation,
+        #count {
             color: var(--text);
-            margin: 0;
+            font-weight: 800;
         }
 
         .controls {
             display: flex;
+            justify-content: center;
             gap: 0.5rem;
             flex-wrap: wrap;
         }
@@ -101,6 +117,14 @@
 
         button.primary:hover:not(:disabled) {
             background: #2563eb;
+        }
+
+        button.danger {
+            background: #991b1b;
+        }
+
+        button.danger:hover:not(:disabled) {
+            background: #b91c1c;
         }
 
         select {
@@ -169,10 +193,10 @@
             </div>
 
             <div class="controls">
-                <button id="run-btn" class="primary">Run</button>
-                <button id="step-btn">Step</button>
-                <button id="stop-btn">Stop</button>
-                <button id="reset-btn">Reset</button>
+                <button id="run-btn" class="primary" title="Start simulation">Run</button>
+                <button id="step-btn" title="Single step">Step</button>
+                <button id="stop-btn" title="Pause simulation">Stop</button>
+                <button id="reset-btn" title="Reset current pattern">Reset</button>
                 <select id="pattern-select">
                     <option value="" disabled selected>Select Pattern...</option>
                     <option value="glider">Glider</option>
@@ -187,7 +211,14 @@
                 <button id="zoom-in-btn">+</button>
                 <button id="zoom-out-btn">-</button>
             </div>
-            <div class="counter" id="count">0</div>
+
+            <div style="display: flex; align-items: center; justify-content: flex-end; gap: 1rem;">
+                <div class="population-info">
+                    <span>Population:</span>
+                    <span id="count">0</span>
+                </div>
+                <button id="quit-btn" class="danger">Quit</button>
+            </div>
         </div>
 
         <div class="canvas-container">
@@ -207,6 +238,7 @@
         const stepBtn = document.getElementById('step-btn');
         const stopBtn = document.getElementById('stop-btn');
         const resetBtn = document.getElementById('reset-btn');
+        const quitBtn = document.getElementById('quit-btn');
         const patternSelect = document.getElementById('pattern-select');
         const zoomInBtn = document.getElementById('zoom-in-btn');
         const zoomOutBtn = document.getElementById('zoom-out-btn');
@@ -283,7 +315,7 @@
             const recordCount = data.getBigUint64(offset + 17, true);
 
             genEl.innerText = gen.toString();
-            countEl.innerText = total.toString();
+            countEl.innerText = total.toLocaleString();
 
             runBtn.disabled = isRunning;
             stopBtn.disabled = !isRunning;
@@ -393,6 +425,10 @@
                     requestState();
                 } else if (tag === 0x02) { // BinaryState
                     renderCells(data, 9);
+                } else if (tag === 0x03) { // Error
+                    const len = data.getUint32(1, true);
+                    const msg = new TextDecoder().decode(new Uint8Array(event.data, 5, len));
+                    console.error("Server Error:", msg);
                 }
             };
 
@@ -407,6 +443,11 @@
         stepBtn.onclick = () => sendRequest(0x01);
         stopBtn.onclick = () => sendRequest(0x05);
         resetBtn.onclick = () => sendRequest(0x02);
+        quitBtn.onclick = () => {
+            if (confirm("Shutdown server?")) {
+                sendRequest(0x07);
+            }
+        };
 
         patternSelect.onchange = (e) => {
             const pattern = e.target.value;

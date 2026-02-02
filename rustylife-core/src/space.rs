@@ -433,6 +433,30 @@ impl SimulationSpace {
         is_running: bool,
         record_count: u64,
     ) -> std::io::Result<()> {
+        let guard = self.mask.read();
+        self.encode_to_file_with_masks(
+            path,
+            generation,
+            total_cells,
+            is_running,
+            record_count,
+            guard.current_state_mask(),
+            guard.last_state_mask(),
+            guard.next_state_mask(),
+        )
+    }
+
+    pub fn encode_to_file_with_masks(
+        &self,
+        path: &std::path::Path,
+        generation: u64,
+        total_cells: u64,
+        is_running: bool,
+        record_count: u64,
+        current_mask: usize,
+        last_mask: usize,
+        next_mask: usize,
+    ) -> std::io::Result<()> {
         let mut file = std::fs::File::create(path)?;
         let mut hasher = crc32fast::Hasher::new();
 
@@ -447,16 +471,11 @@ impl SimulationSpace {
         file.write_all(&header)?;
 
         // 2. Stream Cells from buckets
-        let guard = self.mask.read();
-        let current_mask = guard.current_state_mask();
-        let last_mask = guard.last_state_mask();
-        let last_last_mask = guard.next_state_mask();
-
         let mut buffered_writer = std::io::BufWriter::new(file);
         self.storage().write_cells_streaming(
             current_mask,
             last_mask,
-            last_last_mask,
+            next_mask,
             &mut buffered_writer,
             &mut hasher,
         )?;

@@ -4,7 +4,7 @@ use rustylife_core::space::SimulationSpace;
 use std::collections::HashSet;
 
 #[test]
-fn test_storage_hash_collisions() {
+fn test_storage_correctly_manages_hash_collisions() {
     let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
     let guard = space.read();
     let mask = guard.current_state_mask();
@@ -58,7 +58,7 @@ fn test_storage_hash_collisions() {
 }
 
 #[test]
-fn test_storage_large_volume_crud() {
+fn test_storage_remains_stable_under_large_volume() {
     let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
     let guard = space.read();
     let mask = guard.current_state_mask();
@@ -121,7 +121,7 @@ fn test_storage_find_or_create_idempotency() {
 }
 
 #[test]
-fn test_storage_collect_in_rect_boundaries() {
+fn test_storage_correctly_filters_bounds_on_boundaries() {
     let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
     let guard = space.read();
     let mask = guard.current_state_mask();
