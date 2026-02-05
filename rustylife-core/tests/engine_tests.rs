@@ -326,35 +326,24 @@ fn test_four_gliders_stability() {
     add_glider(10, -10, 1, -1); // NE: (+, -)
 
     // 2. Setup generation counter subscriber
-    struct Counter(std::sync::atomic::AtomicUsize, std::sync::mpsc::Sender<()>);
-    impl EngineSubscriber for Counter {
-        fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
-            if !data.is_empty() {
-                let val = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                if val >= 12 {
-                    let _ = self.1.send(());
-                    return false;
-                }
-            }
-            true
+    // 2. (Removed async counter)
+
+    // 3. Run for 12 generations freely but deterministically stop
+    engine.start_generations(12);
+
+    // 4. Wait for it to finish
+    // Since we don't have a blocking "wait until stopped" method exposed easily without subscribers,
+    // we'll just poll. Ideally, we'd use a subscriber latch, but polling is fine for a unit test.
+    let start = std::time::Instant::now();
+    loop {
+        if engine.generation() >= 12 && engine.is_stopped() {
+            break;
         }
+        if start.elapsed().as_secs() > 5 {
+            panic!("Timed out waiting for generation 12");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let counter = Arc::new(Counter(std::sync::atomic::AtomicUsize::new(0), tx));
-    engine.add_subscriber(counter);
-
-    // 3. Start simulation
-    engine.start();
-
-    // 4. Wait for 12 generations
-    rx.recv_timeout(std::time::Duration::from_secs(10))
-        .expect("Simulation timed out or failed");
-
-    // 5. Stop and verify
-    engine.stop();
-    // Small wait for quiescence
-    std::thread::sleep(std::time::Duration::from_millis(50));
 
     let guard = space.read();
     let current = guard.current_state_mask();
@@ -625,4 +614,73 @@ fn count_visible_recursive(
         count += count_visible_recursive(right, cur, last, last_last);
     }
     count
+}
+#[test]
+fn test_reset_stability() {
+    let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+    let engine = SimulationEngine::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
+
+    // 1. Load Pattern
+    engine.seed("r-pentomino".to_string());
+
+    // 2. Start (run for a bit)
+    engine.start();
+    std::thread::sleep(std::time::Duration::from_millis(100)); // Let it generate some history
+
+    // 3. Stop
+    engine.stop();
+
+    // println!("Waiting for stop...");
+    // Wait for stop
+    let start = std::time::Instant::now();
+    loop {
+        if engine.is_stopped() {
+            break;
+        }
+        if start.elapsed().as_secs() > 2 {
+            panic!("Timed out waiting for stop");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // println!("Stopped at generation: {}", engine.generation());
+
+    // 4. Reset
+    // println!("Triggering Reset...");
+    engine.reset();
+
+    // Wait for generation to go back to 0
+    let start_reset = std::time::Instant::now();
+    loop {
+        if engine.generation() == 0
+            && engine
+                .living_count
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+            && engine.snapshots.get(0).is_some()
+        {
+            break;
+        }
+        if start_reset.elapsed().as_secs() > 2 {
+            println!(
+                "DEBUG: Gen: {}, Living: {}, Stopped: {}",
+                engine.generation(),
+                engine
+                    .living_count
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                engine.is_stopped()
+            );
+            panic!("Timed out waiting for Reset to Gen 0");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // println!("Reset successful. Generation: 0");
+
+    // 5. Start again
+    // println!("Starting again...");
+    engine.start();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    assert!(!engine.is_stopped(), "Engine should be running");
+    assert!(engine.generation() > 0, "Engine should have advanced");
 }

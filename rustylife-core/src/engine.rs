@@ -12,6 +12,8 @@ use std::thread;
 pub enum Tasks {
     /// Initial signal to start the simulation loop.
     Start,
+    /// Start the simulation loop and run for N generations.
+    StartGenerations(u64),
     /// Stop the simulation loop after the current generation.
     Stop,
     /// Execute a single generation step.
@@ -50,6 +52,19 @@ pub enum IoTask {
     },
     /// Shutdown the I/O thread.
     Quit,
+}
+
+impl Tasks {
+    pub fn should_purge(&self) -> bool {
+        match self {
+            Tasks::Start
+            | Tasks::StartGenerations(_)
+            | Tasks::Step
+            | Tasks::SpreadBatch(_, _)
+            | Tasks::CommitBatch(_, _) => true,
+            Tasks::Stop | Tasks::Quit | Tasks::Reset | Tasks::Seed(_) => false,
+        }
+    }
 }
 
 pub struct WorkQueue {
@@ -94,8 +109,10 @@ impl WorkQueue {
 
     pub fn purge(&self) {
         let mut queue_inner = self.queue.lock().unwrap();
-        let cleared = queue_inner.len();
-        queue_inner.clear();
+        let initial_len = queue_inner.len();
+        queue_inner.retain(|t| !t.should_purge());
+        let final_len = queue_inner.len();
+        let cleared = initial_len - final_len;
         self.in_flight_count.fetch_sub(cleared, Ordering::SeqCst);
     }
 
@@ -163,9 +180,9 @@ impl SnapshotStore {
         g.get(&generation).cloned()
     }
 
-    pub fn latest_generation(&self) -> u64 {
-        let g = self.snapshots.read().unwrap();
-        g.keys().next_back().cloned().unwrap_or(0)
+    pub fn clear(&self) {
+        let mut g = self.snapshots.write().unwrap();
+        g.clear();
     }
 }
 
@@ -196,6 +213,8 @@ pub struct SimulationEngine {
     transition_lock: Mutex<()>,
     /// Double-buffered snapshot record storage [generation % 2][bucket_idx].
     record_buffers: [Vec<Mutex<Vec<SnapshotRecord>>>; 2],
+    /// The target generation to stop at (u64::MAX if unlimited).
+    target_generation: AtomicU64,
 }
 
 impl SimulationEngine {
@@ -231,6 +250,7 @@ impl SimulationEngine {
                     .map(|_| Mutex::new(Vec::with_capacity(1024)))
                     .collect(),
             ],
+            target_generation: AtomicU64::new(u64::MAX),
         });
 
         // Setup Background I/O thread
@@ -302,6 +322,7 @@ impl SimulationEngine {
                     // corruption from deadlocking the entire thread pool. It is normal
                     // for it to appear in the profile trace wrapping actual execution.
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // eprintln!("Thread {} processing {:?}", thread_idx, task);
                         match &task {
                             Tasks::Quit => {
                                 engine_arc.work_queue.finish_work();
@@ -317,13 +338,33 @@ impl SimulationEngine {
                             }
                             Tasks::Start => {
                                 let _lock = engine_arc.transition_lock.lock().unwrap();
+                                engine_arc.stopping.store(false, Ordering::SeqCst);
+                                if engine_arc.work_queue.in_flight_count() == 1 {
+                                    // Do NOT reset target_generation here, as this task is recycled for the internal loop.
+                                    // Public start() sets it to MAX. StartGenerations() sets it to specific target.
+
+                                    if engine_arc.tainted.load(Ordering::SeqCst) {
+                                        engine_arc.scratchpad.clear();
+                                        engine_arc.space.repair();
+                                        engine_arc.tainted.store(false, Ordering::SeqCst);
+                                    }
+                                    Self::initiate_spread(&engine_arc);
+                                }
+                            }
+                            Tasks::StartGenerations(count) => {
+                                let _lock = engine_arc.transition_lock.lock().unwrap();
+                                let current = engine_arc.generation.load(Ordering::SeqCst) as u64;
+                                engine_arc
+                                    .target_generation
+                                    .store(current + count, Ordering::SeqCst);
+                                engine_arc.stopping.store(false, Ordering::SeqCst);
+
                                 if engine_arc.work_queue.in_flight_count() == 1 {
                                     if engine_arc.tainted.load(Ordering::SeqCst) {
                                         engine_arc.scratchpad.clear();
                                         engine_arc.space.repair();
                                         engine_arc.tainted.store(false, Ordering::SeqCst);
                                     }
-                                    engine_arc.stopping.store(false, Ordering::SeqCst);
                                     Self::initiate_spread(&engine_arc);
                                 }
                             }
@@ -347,6 +388,7 @@ impl SimulationEngine {
                             }
                             Tasks::Reset => {
                                 let _lock = engine_arc.transition_lock.lock().unwrap();
+                                engine_arc.snapshots.clear();
                                 engine_arc.space.clear();
                                 engine_arc.generation.store(0, Ordering::SeqCst);
                                 engine_arc.living_count.store(0, Ordering::SeqCst);
@@ -401,8 +443,10 @@ impl SimulationEngine {
 
     fn handle_transition_internal(engine: &Arc<Self>, completed_task: &Tasks) {
         match completed_task {
-            Tasks::Start | Tasks::Step | Tasks::SpreadBatch(_, _) => {
-                if engine.work_queue.in_flight_count() == 0 {
+            Tasks::Start | Tasks::StartGenerations(_) | Tasks::Step | Tasks::SpreadBatch(_, _) => {
+                let in_flight = engine.work_queue.in_flight_count();
+                // eprintln!("Transition Check: Task {:?}, InFlight {}", completed_task, in_flight);
+                if in_flight == 0 {
                     if !Self::initiate_commit(engine) {
                         Self::handle_transition_internal(engine, &Tasks::CommitBatch(0, 0));
                     }
@@ -436,7 +480,20 @@ impl SimulationEngine {
                     });
 
                     if !engine.stopping.load(Ordering::SeqCst) {
-                        engine.work_queue.enqueue(Tasks::Start);
+                        let target = engine.target_generation.load(Ordering::SeqCst);
+                        if generation_count as u64 >= target {
+                            engine.stopping.store(true, Ordering::SeqCst);
+                            // We do not enqueue Tasks::Start, effectively stopping here.
+                            // But we should notify subscribers that we ARE stopped?
+                            // No, IoTask::Snapshot has is_running flag.
+                            // But we need to update that flag for the NEXT snapshot or this current one?
+                            // The snapshot we just sent (generation_count) had is_running = !stopping.
+                            // We read stopping BEFORE writing to IoTx.
+                            // If we set stopping=true HERE, the snapshot just sent might have said "Running".
+                            // That's fine, the NEXT status update (if any) or query will show stopped.
+                        } else {
+                            engine.work_queue.enqueue(Tasks::Start);
+                        }
                     }
                 }
             }
@@ -589,8 +646,14 @@ impl SimulationEngine {
         // when a seed is already being applied. The worker-side check for
         // in_flight_count == 1 handles the actual state transition safety.
 
+        self.target_generation.store(u64::MAX, Ordering::SeqCst);
         self.stopping.store(false, Ordering::SeqCst);
         self.work_queue.enqueue(Tasks::Start);
+    }
+
+    pub fn start_generations(&self, count: u64) {
+        self.stopping.store(false, Ordering::SeqCst);
+        self.work_queue.enqueue(Tasks::StartGenerations(count));
     }
 
     pub fn stop(&self) {
@@ -672,6 +735,8 @@ impl SimulationEngine {
             buckets: captured_buckets,
             is_running: !engine.stopping.load(Ordering::SeqCst),
         });
+
+        engine.living_count.store(total_living, Ordering::SeqCst);
     }
 
     fn collect_records_recursive(

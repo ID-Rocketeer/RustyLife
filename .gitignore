@@ -3,4 +3,8 @@ debug/
 flycheck0/
 tmp/
 target/
-staging
+staging/
+*.json
+*.json.gz
+*.binsnap
+*.log
