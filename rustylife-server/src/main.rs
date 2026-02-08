@@ -19,10 +19,11 @@ use axum::{
 };
 use clap::Parser;
 use rustylife_core::{
-    BinaryPacket, Request, Response, SimulationPresenter,
+    Request, Response, SimulationPresenter,
     engine::{EngineSubscriber, SimulationEngine},
     space::SimulationSpace,
 };
+use rustylife_gui::{AppState, RustyLifeApp, UserActionHandler};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -91,21 +92,17 @@ pub struct PresenterSubscriber {
 
 impl EngineSubscriber for PresenterSubscriber {
     fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
-        if let Ok(mut packet) = rustylife_core::decode_binary_packet(&data) {
+        if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
 
             // Filter based on Presenter's viewport
-            if let Some(((min_x, min_y), (max_x, max_y))) = presenter.get_viewport() {
-                let filtered: Vec<_> = packet
-                    .cells
-                    .into_iter()
-                    .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
-                    .collect();
-                packet.cells = filtered;
-                packet.record_count = packet.cells.len() as u64;
+            if let Some(_) = presenter.get_viewport() {
+                // The presenter's update_state will handle the viewport filtering itself
+                // efficiently now that we pass the packet with an iterator.
+                presenter.update_state(packet);
+            } else {
+                presenter.update_state(packet);
             }
-
-            presenter.update_state(packet);
         }
         true
     }
@@ -115,254 +112,49 @@ struct AppStateEnv {
     engine: Arc<SimulationEngine>,
     tx: broadcast::Sender<u64>,
     shutdown_tx: broadcast::Sender<()>,
+    cores: usize,
 }
 
-struct RustyLifeGuiState {
-    viewport_cells: Vec<((i128, i128), u8)>,
-    generation: u64,
-    is_running: bool,
-    target_viewport: Option<((i128, i128), (i128, i128))>,
-}
-
-impl SimulationPresenter for RustyLifeGuiState {
-    fn update_state(&mut self, packet: BinaryPacket) {
-        self.viewport_cells = packet.cells;
-        self.generation = packet.generation;
-        self.is_running = packet.is_running;
-    }
-
-    fn get_viewport(&self) -> Option<((i128, i128), (i128, i128))> {
-        self.target_viewport
-    }
-}
-
-struct RustyLifeGui {
-    state: Arc<Mutex<RustyLifeGuiState>>,
+struct ServerActionHandler {
     engine: Arc<SimulationEngine>,
-    cell_size: f32,
-    view_offset: egui::Vec2,
-    last_generation: u64,
+    state: Arc<Mutex<AppState>>,
 }
 
-impl RustyLifeGui {
-    fn new(engine: Arc<SimulationEngine>, state: Arc<Mutex<RustyLifeGuiState>>) -> Self {
-        Self {
-            state,
-            engine,
-            cell_size: 10.0,
-            view_offset: egui::Vec2::ZERO,
-            last_generation: u64::MAX, // Force initial update
+impl UserActionHandler for ServerActionHandler {
+    fn start(&mut self) {
+        self.engine.start();
+    }
+    fn stop(&mut self) {
+        self.engine.stop();
+    }
+    fn step(&mut self) {
+        self.engine.step();
+    }
+    fn reset(&mut self) {
+        self.engine.reset();
+    }
+    fn seed(&mut self, pattern: String) {
+        self.engine.seed(pattern);
+    }
+    fn request_state(&mut self, _gen: u64, viewport: Option<((i128, i128), (i128, i128))>) {
+        // Create an optimized fetch for visual updates
+        if let Some(viewport) = viewport {
+            let cells = self.engine.get_cells_in_rect(viewport.0, viewport.1);
+            let mut s = self.state.lock().unwrap();
+            s.viewport_cells = cells;
+
+            // Also grab atomic counters to keep UI responsive even if snapshots lag
+            s.generation = self.engine.generation();
+            s.total_cells = self
+                .engine
+                .living_count
+                .load(std::sync::atomic::Ordering::Relaxed);
         }
     }
-}
-
-impl eframe::App for RustyLifeGui {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let (cells, generation) = {
-            let s = self.state.lock().unwrap();
-            (s.viewport_cells.clone(), s.generation)
-        };
-
-        if generation == 0 && self.last_generation != 0 && self.view_offset != egui::Vec2::ZERO {
-            self.view_offset = egui::Vec2::ZERO;
-        }
-        self.last_generation = generation;
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(format!(
-                "RustyLife Native GUI (Integrated - Gen {})",
-                generation
-            ));
-
-            let is_running = !self.engine.is_stopped();
-
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!is_running, egui::Button::new("Run"))
-                    .clicked()
-                {
-                    self.engine.start();
-                }
-                if ui.button("Step").clicked() {
-                    self.engine.step();
-                }
-                if ui
-                    .add_enabled(is_running, egui::Button::new("Stop"))
-                    .clicked()
-                {
-                    self.engine.stop();
-                }
-                if ui
-                    .add_enabled(!is_running, egui::Button::new("Reset"))
-                    .clicked()
-                {
-                    self.engine.reset();
-                }
-
-                ui.separator();
-
-                ui.add_space(8.0);
-                if ui
-                    .add(egui::Button::new("Quit").fill(egui::Color32::from_rgb(153, 27, 27)))
-                    .on_hover_text("Shutdown server")
-                    .clicked()
-                {
-                    self.engine.stop();
-                    std::process::exit(0);
-                }
-
-                ui.add_space(8.0);
-
-                ui.add_enabled_ui(!is_running, |ui| {
-                    egui::ComboBox::from_label("Patterns")
-                        .selected_text("Select Pattern...")
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(false, "glider").clicked() {
-                                self.engine.seed("glider".to_string());
-                            }
-                            if ui.selectable_label(false, "r-pentomino").clicked() {
-                                self.engine.seed("r-pentomino".to_string());
-                            }
-                            if ui.selectable_label(false, "glider gun").clicked() {
-                                self.engine.seed("glider gun".to_string());
-                            }
-                            if ui.selectable_label(false, "spaceship").clicked() {
-                                self.engine.seed("spaceship".to_string());
-                            }
-                            if ui.selectable_label(false, "blinker").clicked() {
-                                self.engine.seed("blinker".to_string());
-                            }
-                            if ui.selectable_label(false, "block").clicked() {
-                                self.engine.seed("block".to_string());
-                            }
-                            if ui.selectable_label(false, "beehive").clicked() {
-                                self.engine.seed("beehive".to_string());
-                            }
-                            if ui.selectable_label(false, "breeder 1").clicked() {
-                                self.engine.seed("breeder 1".to_string());
-                            }
-                        });
-                });
-            });
-
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Zoom:");
-                if ui.button("In (+)").clicked() || ui.input(|i| i.key_pressed(egui::Key::Plus)) {
-                    self.cell_size = (self.cell_size + 1.0).min(32.0);
-                }
-                if ui.button("Out (-)").clicked() || ui.input(|i| i.key_pressed(egui::Key::Minus)) {
-                    self.cell_size = (self.cell_size - 1.0).max(1.0);
-                }
-                ui.label(format!("{:.0}px", self.cell_size));
-            });
-
-            let born = cells.iter().filter(|(_, s)| *s == 0b10).count();
-            let stable = cells.iter().filter(|(_, s)| *s == 0b11).count();
-            let dying = cells.iter().filter(|(_, s)| *s == 0b01).count();
-
-            let total = stable + born + dying;
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{}", total))
-                        .color(egui::Color32::WHITE)
-                        .strong(),
-                );
-                ui.label("Cells");
-                ui.add_space(10.0);
-                ui.label(format!(
-                    "(Stable: {}, Born: {}, Dying: {})",
-                    stable, born, dying
-                ));
-            });
-
-            ui.separator();
-
-            // Simulation Rendering
-            egui::Frame::canvas(ui.style())
-                .fill(egui::Color32::BLACK) // Universe background
-                .show(ui, |ui| {
-                    let (response, painter) =
-                        ui.allocate_painter(ui.available_size(), egui::Sense::drag());
-                    let rect = response.rect;
-
-                    if response.dragged() {
-                        self.view_offset += response.drag_delta();
-                    }
-
-                    // Handle Zooming (Mouse Wheel)
-                    if response.hovered() {
-                        let zoom_delta = ui.input(|i| i.raw_scroll_delta.y);
-                        if zoom_delta != 0.0 {
-                            let pointer_pos =
-                                ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
-                            let current_center = rect.center() + self.view_offset;
-
-                            // Calculate world coordinate under local pointer
-                            let offset_from_center = pointer_pos - current_center;
-                            let world_x = offset_from_center.x / self.cell_size;
-                            let world_y = offset_from_center.y / self.cell_size;
-
-                            let delta = if zoom_delta > 0.0 { 1.0 } else { -1.0 };
-                            let new_cell_size = (self.cell_size + delta).clamp(1.0, 32.0);
-
-                            if new_cell_size != self.cell_size {
-                                self.view_offset = pointer_pos
-                                    - rect.center()
-                                    - egui::vec2(world_x * new_cell_size, world_y * new_cell_size);
-                                self.cell_size = new_cell_size;
-                            }
-                        }
-                    }
-
-                    let center = rect.center() + self.view_offset;
-
-                    // Calculate visible bounds
-                    let min_x = ((rect.min.x - center.x) / self.cell_size).floor() as i128;
-                    let max_x = ((rect.max.x - center.x) / self.cell_size).ceil() as i128;
-                    let min_y = ((rect.min.y - center.y) / self.cell_size).floor() as i128;
-                    let max_y = ((rect.max.y - center.y) / self.cell_size).ceil() as i128;
-
-                    {
-                        let mut s = self.state.lock().unwrap();
-                        s.target_viewport = Some(((min_x, min_y), (max_x, max_y)));
-                    }
-
-                    for ((x, y), state) in cells {
-                        let color = match state {
-                            0b11 => egui::Color32::from_rgb(59, 130, 246), // Alive (Blue)
-                            0b10 => egui::Color32::from_rgb(16, 185, 129), // Born (Green)
-                            0b01 => egui::Color32::from_rgb(239, 68, 68),  // Dying (Red)
-                            _ => continue,
-                        };
-
-                        painter.rect_filled(
-                            egui::Rect::from_min_size(
-                                egui::pos2(
-                                    center.x + (x as f32 * self.cell_size),
-                                    center.y + (y as f32 * self.cell_size),
-                                ),
-                                egui::vec2(
-                                    if self.cell_size <= 1.0 {
-                                        self.cell_size
-                                    } else {
-                                        self.cell_size - 1.0
-                                    },
-                                    if self.cell_size <= 1.0 {
-                                        self.cell_size
-                                    } else {
-                                        self.cell_size - 1.0
-                                    },
-                                ),
-                            ),
-                            0.0,
-                            color,
-                        );
-                    }
-                });
-        });
-
-        ctx.request_repaint();
+    fn shutdown(&mut self) {
+        self.engine.stop();
+        // Trigger system exit
+        std::process::exit(0);
     }
 }
 
@@ -378,13 +170,18 @@ fn main() {
 
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let pool_size = std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(|n| n.get().saturating_sub(1).max(1)) // Reserve 1 core for the I/O thread
         .unwrap_or(8);
     println!(
-        "Initializing Simulation Engine with {} threads...",
+        "Initializing Simulation Engine with {} workers (+1 I/O thread)...",
         pool_size
     );
     let engine = SimulationEngine::new(space.clone(), pool_size);
+
+    // Load dynamic patterns from "patterns/" directory
+    println!("Loading patterns from ./patterns directory...");
+    load_dynamic_patterns(&engine);
+
     let (tx, _rx) = broadcast::channel::<u64>(100);
 
     // Register subscriber for real-time broadcasts
@@ -395,12 +192,11 @@ fn main() {
     engine.add_subscriber(subscriber);
 
     let gui_state = if args.gui {
-        let state = Arc::new(Mutex::new(RustyLifeGuiState {
-            viewport_cells: Vec::new(),
-            generation: 0,
-            is_running: false,
-            target_viewport: None,
-        }));
+        let mut state = AppState::default();
+        state.cores = pool_size;
+        state.is_connected = true; // Native GUI is always "connected" to the internal engine
+        state.patterns = engine.get_catalog();
+        let state = Arc::new(Mutex::new(state));
 
         let gui_presenter = Arc::clone(&state) as Arc<Mutex<dyn SimulationPresenter>>;
         engine.add_subscriber(Arc::new(PresenterSubscriber {
@@ -432,6 +228,16 @@ fn main() {
         engine: engine.clone(),
         tx: tx.clone(),
         shutdown_tx: shutdown_tx.clone(),
+        cores: pool_size,
+    });
+
+    // Handle Ctrl-C to trigger clean shutdown
+    let shutdown_tx_clone = shutdown_tx.clone();
+    rt.spawn(async move {
+        if let Ok(()) = tokio::signal::ctrl_c().await {
+            println!("\r\nCtrl-C received. Initiating shutdown...");
+            let _ = shutdown_tx_clone.send(());
+        }
     });
 
     // Spawn the server stack in the background
@@ -442,6 +248,9 @@ fn main() {
     rt.spawn(async move {
         let app = Router::new()
             .route("/", get(index))
+            .route("/dashboard.js", get(dashboard_js))
+            .route("/utils.js", get(utils_js))
+            .route("/protocol.js", get(protocol_js))
             .route("/ws", get(ws_handler))
             .with_state(shared_state_clone.clone());
 
@@ -471,10 +280,25 @@ fn main() {
     if args.gui {
         let options = eframe::NativeOptions::default();
         let gui_state = gui_state.unwrap();
+        // Subscribe to shutdown channel for GUI
+        let gui_shutdown_rx = shutdown_tx.subscribe();
+
+        // Create Handler
+        let handler = Box::new(ServerActionHandler {
+            engine: engine.clone(),
+            state: gui_state.clone(),
+        });
+
         eframe::run_native(
-            "RustyLife Server",
+            "RustyLife",
             options,
-            Box::new(|_cc| Ok(Box::new(RustyLifeGui::new(engine, gui_state)))),
+            Box::new(|_cc| {
+                Ok(Box::new(RustyLifeApp::new(
+                    gui_state,
+                    handler,
+                    Some(gui_shutdown_rx),
+                )))
+            }),
         )
         .unwrap();
     } else {
@@ -485,8 +309,99 @@ fn main() {
     }
 }
 
+fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
+    // Look for patterns relative to the executable location (target/debug/patterns)
+    // This ensures it works for both deployment (copy exe+dir) and cargo run (if copied to target).
+    let patterns_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join("patterns")))
+        .unwrap_or_else(|| std::path::PathBuf::from("patterns")); // Fallback to CWD
+
+    if patterns_dir.exists() && patterns_dir.is_dir() {
+        println!(
+            "Loading patterns from: {:?}",
+            patterns_dir
+                .canonicalize()
+                .unwrap_or(patterns_dir.to_path_buf())
+        );
+        if let Ok(entries) = std::fs::read_dir(patterns_dir) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("rle") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let mut name = path.file_stem().unwrap().to_string_lossy().to_string();
+                        let mut description = "User loaded pattern".to_string();
+
+                        // Simple metadata parsing
+                        for line in content.lines() {
+                            if line.starts_with("#N") {
+                                name = line[2..].trim().to_string();
+                            } else if line.starts_with("#C") {
+                                let comment = line[2..].trim();
+                                if description == "User loaded pattern" {
+                                    description = comment.to_string();
+                                } else {
+                                    description.push_str(" ");
+                                    description.push_str(comment);
+                                }
+                            }
+                        }
+
+                        engine.register_pattern(rustylife_core::patterns::Pattern {
+                            name: name.clone(),
+                            description,
+                            source: rustylife_core::patterns::PatternSource::Rle(content),
+                        });
+                        println!("Loaded dynamic pattern: {}", name);
+                    }
+                }
+            }
+        }
+    } else {
+        println!(
+            "Warning: No local './patterns' directory found. Ensure build script is running or patterns are deployed."
+        );
+        // We do NOT create the directory anymore, as it is a build artifact.
+    }
+}
+
+// Handlers
 async fn index() -> impl IntoResponse {
-    axum::response::Html(include_str!("../static/index.html"))
+    let html = include_str!("../static/index.html");
+
+    // Runtime injection of tooltip constants from rustylife-gui
+    // This ensures Single Source of Truth for UI text.
+    let html = html
+        .replace("{{TOOLTIP_ZOOM}}", rustylife_gui::text::TOOLTIP_ZOOM)
+        .replace("{{TOOLTIP_EXTENT}}", rustylife_gui::text::TOOLTIP_EXTENT)
+        .replace("{{TOOLTIP_CENTER}}", rustylife_gui::text::TOOLTIP_CENTER)
+        .replace("{{TOOLTIP_WORK}}", rustylife_gui::text::TOOLTIP_WORK)
+        .replace("{{TOOLTIP_NET}}", rustylife_gui::text::TOOLTIP_NET)
+        .replace("{{TOOLTIP_GPS}}", rustylife_gui::text::TOOLTIP_GPS)
+        .replace("{{TOOLTIP_CORES}}", rustylife_gui::text::TOOLTIP_CORES);
+
+    axum::response::Html(html)
+}
+
+async fn dashboard_js() -> impl IntoResponse {
+    axum::response::Response::builder()
+        .header("Content-Type", "application/javascript")
+        .body(include_str!("../static/dashboard.js").to_owned())
+        .unwrap()
+}
+
+async fn utils_js() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../static/utils.js"),
+    )
+}
+
+async fn protocol_js() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        include_str!("../static/protocol.js"),
+    )
 }
 
 async fn ws_handler(
@@ -502,6 +417,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
 
     // Send the current generation immediately so the client can sync up
     let current_gen = state.engine.generation();
+    // Send Welcome message
+    let welcome = Response::Welcome {
+        cores: state.cores,
+        patterns: state.engine.get_catalog(),
+    };
+    let _ = socket
+        .send(Message::Binary(welcome.to_bytes().into()))
+        .await;
+
     let resp = Response::SnapshotAvailable(current_gen);
     let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
 
@@ -509,7 +433,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
         tokio::select! {
             result = socket.recv() => {
                 if let Some(Ok(Message::Binary(bin))) = result {
-                    if let Ok(req) = Request::from_bytes(&bin) {
+                    // Try parsing as Hybrid (Prefix) first, then fallback to Raw JSON
+                    let req = Request::from_bytes(&bin).ok()
+                        .or_else(|| serde_json::from_slice::<Request>(&bin).ok());
+
+                    if let Some(req) = req {
                         match req {
                             Request::NextStep => {
                                 state.engine.step();
@@ -519,20 +447,35 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                             }
                             Request::GetState { generation, viewport } => {
                                 let resp = handle_get_state(&state, generation, viewport).await;
-                                let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
+                                let _ = socket.send(Message::Binary(resp.into())).await;
                             }
                             Request::Start => {
                                 state.engine.start();
                             }
                             Request::Stop => {
-                                state.engine.stop();
+                                let engine = state.engine.clone();
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    engine.stop();
+                                })
+                                .await;
+
+                                // Force a UI update so the client knows we stopped
+                                let current_gen = state.engine.generation();
+                                let resp = Response::SnapshotAvailable(current_gen);
+                                let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
                             }
                             Request::Seed(pattern) => {
                                 state.engine.seed(pattern);
                             }
                             Request::Shutdown => {
+                                println!("Server Shutdown requested via WebSocket");
                                 let _ = state.shutdown_tx.send(());
                             }
+                        }
+                    } else {
+                        // Log failure only for non-empty packets to avoid spam
+                        if !bin.is_empty() {
+                            println!("WS: Failed to parse request (len={}): {:?}", bin.len(), bin);
                         }
                     }
                 } else {
@@ -562,6 +505,14 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
 
     // Send the current generation immediately so the client can sync up
     let current_gen = state.engine.generation();
+    // Send Welcome message
+    let welcome = Response::Welcome {
+        cores: state.cores,
+        patterns: state.engine.get_catalog(),
+    };
+    let bytes = welcome.to_bytes();
+    let _ = writer.write_all(&bytes).await;
+
     let resp = Response::SnapshotAvailable(current_gen);
     let bytes = resp.to_bytes();
     let _ = writer.write_all(&bytes).await;
@@ -571,44 +522,22 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
         tokio::select! {
             result = reader.read_exact(&mut tag_buf) => {
                 if result.is_err() { break; }
-                let tag = tag_buf[0];
-                let req = match tag {
-                    0x01 => Some(Request::NextStep),
-                    0x02 => Some(Request::Reset),
-                    0x03 => {
-                        let mut gen_buf = [0u8; 8];
-                        if reader.read_exact(&mut gen_buf).await.is_err() { break; }
-                        let generation = u64::from_le_bytes(gen_buf);
 
-                        let mut has_vp_buf = [0u8; 1];
-                        if reader.read_exact(&mut has_vp_buf).await.is_err() { break; }
+                // Read Length Prefix (first byte read above, need 3 more)
+                let mut length_bytes = [0u8; 4];
+                length_bytes[0] = tag_buf[0];
+                if reader.read_exact(&mut length_bytes[1..]).await.is_err() { break; }
 
-                        let viewport = if has_vp_buf[0] == 1 {
-                            let mut vp_buf = [0u8; 64];
-                            if reader.read_exact(&mut vp_buf).await.is_err() { break; }
-                            let x1 = i128::from_le_bytes(vp_buf[0..16].try_into().unwrap());
-                            let y1 = i128::from_le_bytes(vp_buf[16..32].try_into().unwrap());
-                            let x2 = i128::from_le_bytes(vp_buf[32..48].try_into().unwrap());
-                            let y2 = i128::from_le_bytes(vp_buf[48..64].try_into().unwrap());
-                            Some(((x1, y1), (x2, y2)))
-                        } else {
-                            None
-                        };
-                        Some(Request::GetState { generation, viewport })
+                let len = u32::from_le_bytes(length_bytes) as usize;
+                let mut payload = vec![0u8; len];
+                if reader.read_exact(&mut payload).await.is_err() { break; }
+
+                let req = match serde_json::from_slice::<Request>(&payload) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        println!("IPC: Failed to deserialize request: {}", e);
+                        None
                     }
-                    0x04 => Some(Request::Start),
-                    0x05 => Some(Request::Stop),
-                    0x06 => {
-                        let mut len_buf = [0u8; 4];
-                        if reader.read_exact(&mut len_buf).await.is_err() { break; }
-                        let len = u32::from_le_bytes(len_buf) as usize;
-                        let mut payload = vec![0u8; len];
-                        if reader.read_exact(&mut payload).await.is_err() { break; }
-                        let pattern = String::from_utf8_lossy(&payload).to_string();
-                        Some(Request::Seed(pattern))
-                    }
-                    0x07 => Some(Request::Shutdown),
-                    _ => None,
                 };
 
                 if let Some(req) = req {
@@ -616,13 +545,21 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                         Request::NextStep => { state.engine.step(); }
                         Request::Reset => { state.engine.reset(); }
                         Request::GetState { generation, viewport } => {
-                            let resp = handle_get_state(&state, generation, viewport).await;
-                            let bytes = resp.to_bytes();
+                            let bytes = handle_get_state(&state, generation, viewport).await;
                             let _ = writer.write_all(&bytes).await;
                         }
-                        Request::Start => { state.engine.start(); }
-                        Request::Stop => { state.engine.stop(); }
-                        Request::Seed(pattern) => { state.engine.seed(pattern); }
+                        Request::Start => {
+                            println!("IPC: Received Start Request");
+                            state.engine.start();
+                        }
+                        Request::Stop => {
+                            println!("IPC: Received Stop Request");
+                            state.engine.stop();
+                        }
+                        Request::Seed(pattern) => {
+                            println!("IPC: Seeding pattern: {}", pattern);
+                            state.engine.seed(pattern);
+                        }
                         Request::Shutdown => {
                             let _ = state.shutdown_tx.send(());
                         }
@@ -649,38 +586,44 @@ async fn handle_get_state(
     state: &Arc<AppStateEnv>,
     generation: u64,
     viewport: Option<((i128, i128), (i128, i128))>,
-) -> Response {
+) -> Vec<u8> {
     let snapshot = state.engine.snapshots.get(generation);
 
     if snapshot.is_none() {
         return Response::Error(format!(
             "Snapshot for generation {} not found in memory (too old or not yet generated)",
             generation
-        ));
+        ))
+        .to_bytes();
     }
 
     let data = snapshot.unwrap();
     if viewport.is_none() {
-        // OPTIMIZATION: Zero-Copy Path
-        // We need to patch 'is_running' in our local-ish copy.
-        // Since we want to avoid mutating the master Arc, we'll clone the vec if it needs patching.
-        let mut buf = (*data).clone();
-        if buf.len() > 16 + 4 {
-            let is_running = !state.engine.is_stopped();
-            buf[16] = if is_running { 1 } else { 0 };
+        // Hybrid Protocol Optimization:
+        // Parse Header -> Update is_running -> Reserialize Header -> Append binary payload
+        if let Ok((mut resp, consumed_len)) = Response::from_bytes(&data) {
+            if let Response::BinaryStateHeader {
+                ref mut is_running, ..
+            } = resp
+            {
+                *is_running = !state.engine.is_stopped();
 
-            // Recalculate CRC
-            let len = buf.len();
-            let payload = &buf[0..len - 4];
-            let new_crc = crc32fast::hash(payload);
-            let crc_bytes = new_crc.to_le_bytes();
+                // Re-serialize header
+                let json = serde_json::to_vec(&resp).unwrap();
+                let json_len = json.len() as u32;
 
-            buf[len - 4] = crc_bytes[0];
-            buf[len - 3] = crc_bytes[1];
-            buf[len - 2] = crc_bytes[2];
-            buf[len - 1] = crc_bytes[3];
+                let original_payload = &data[consumed_len..];
+                let mut buf = Vec::with_capacity(4 + json.len() + original_payload.len());
+
+                buf.extend_from_slice(&json_len.to_le_bytes());
+                buf.extend_from_slice(&json);
+                buf.extend_from_slice(original_payload);
+
+                return buf;
+            }
         }
-        Response::BinaryState(buf)
+        // Fallback if parsing fails (shouldn't happen)
+        data.to_vec()
     } else {
         // Viewport Filtering (In Memory)
         match rustylife_core::decode_binary_packet(&data) {
@@ -688,26 +631,27 @@ async fn handle_get_state(
                 let filtered_cells: Vec<_> =
                     if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
                         packet
-                            .cells
-                            .into_iter()
+                            .cells()
                             .filter(|((x, y), _)| {
                                 *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y
                             })
                             .collect()
                     } else {
-                        packet.cells
+                        packet.cells().collect()
                     };
 
-                let is_running = !state.engine.is_stopped();
-                let response_packet = rustylife_core::encode_binary_packet(
+                rustylife_core::encode_binary_packet(
                     packet.generation,
                     packet.total_cells,
-                    is_running,
+                    packet.is_running,
                     &filtered_cells,
-                );
-                Response::BinaryState(response_packet)
+                    packet.gps,
+                    packet.work_rate,
+                    packet.net_rate,
+                )
             }
-            Err(e) => Response::Error(format!("Failed to decode memory snapshot: {}", e)),
+            Err(e) => Response::Error(format!("Failed to decode snapshot for filtering: {}", e))
+                .to_bytes(),
         }
     }
 }

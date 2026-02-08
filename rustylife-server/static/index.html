@@ -17,12 +17,11 @@
             background-color: var(--bg);
             color: var(--text);
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            height: 100vh;
             margin: 0;
+            padding: 0;
             overflow: hidden;
+            /* Canvas will resize to container */
+            height: 100vh;
             width: 100vw;
         }
 
@@ -48,7 +47,7 @@
 
         .header-controls {
             display: grid;
-            grid-template-columns: 200px 1fr 200px;
+            grid-template-columns: minmax(150px, 1fr) auto minmax(150px, 1fr);
             align-items: center;
             margin-bottom: 0.5rem;
             gap: 1rem;
@@ -161,11 +160,65 @@
 
         .footer-status {
             display: flex;
-            justify-content: flex-end;
+            justify-content: flex-start;
             align-items: center;
             margin-top: 0.5rem;
             font-size: 0.75rem;
             color: #9ca3af;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 4px 12px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            font-weight: 500;
+            gap: 1.5rem;
+            overflow-x: auto;
+            /* Allow footer to scroll if window too narrow */
+            min-height: 32px;
+        }
+
+        .instrument-segment {
+            display: flex;
+            align-items: center;
+            gap: 0px;
+            flex-shrink: 0;
+            /* Keep telemetry from being squashed */
+        }
+
+        .instrument-label {
+            color: #6b7280;
+            font-weight: 800;
+            font-size: 0.65rem;
+            letter-spacing: 0.05em;
+            cursor: help;
+            border-bottom: 1px dotted #4b5563;
+            /* padding-right removed for tightness */
+        }
+
+        .instrument-data {
+            font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-variant-numeric: tabular-nums;
+            color: #10b981;
+            /* Laboratory Green */
+            background: rgba(0, 0, 0, 0.5);
+            padding: 2px 0;
+            border-radius: 2px;
+            letter-spacing: -0.02em;
+            display: inline-block;
+            text-align: left;
+            /* Changed from center to left to keep bracket close to label */
+            /* padding-left removed for tightness */
+            white-space: pre;
+        }
+
+        /* Specific widths to keep labels attached to data */
+        /* Adjusted widths based on left-align and content */
+        /* REMOVED: min-widths caused inconsistent visual spacing with flex-gap */
+
+        .connection-status {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            min-width: 120px;
         }
 
         .dot {
@@ -193,23 +246,17 @@
             </div>
 
             <div class="controls">
-                <button id="run-btn" class="primary" title="Start simulation">Run</button>
-                <button id="step-btn" title="Single step">Step</button>
+                <button id="run-btn" class="primary" title="Start simulation">Start</button>
                 <button id="stop-btn" title="Pause simulation">Stop</button>
+                <button id="step-btn" title="Single step">Step</button>
+
                 <button id="reset-btn" title="Reset current pattern">Reset</button>
+                <button id="origin-btn" title="Return to Origin (0,0)">Origin</button>
                 <select id="pattern-select">
                     <option value="" disabled selected>Select Pattern...</option>
-                    <option value="glider">Glider</option>
-                    <option value="r-pentomino">R-Pentomino</option>
-                    <option value="glider gun">Glider Gun</option>
-                    <option value="spaceship">Spaceship</option>
-                    <option value="blinker">Blinker</option>
-                    <option value="block">Block</option>
-                    <option value="beehive">Beehive</option>
-                    <option value="breeder 1">Breeder 1</option>
                 </select>
-                <button id="zoom-in-btn">+</button>
-                <button id="zoom-out-btn">-</button>
+                <button id="zoom-in-btn">In</button>
+                <button id="zoom-out-btn">Out</button>
             </div>
 
             <div style="display: flex; align-items: center; justify-content: flex-end; gap: 1rem;">
@@ -226,260 +273,48 @@
         </div>
 
         <div class="footer-status">
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_ZOOM}}">ZOOM:</span>
+                <span id="zoom-display" class="instrument-data">[ 04.00X ]</span>
+            </div>
+
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_EXTENT}}">EXTENT:</span>
+                <span id="extent-display" class="instrument-data">[ 00000 &times; 00000 ]</span>
+            </div>
+
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_CENTER}}">CENTER:</span>
+                <span id="center-display" class="instrument-data">[ +000000000 , +000000000 ]</span>
+            </div>
+
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_WORK}}">WORK:</span>
+                <span id="work-display" class="instrument-data">[ 000.00 /S ]</span>
+            </div>
+
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_NET}}">NET:</span>
+                <span id="net-display" class="instrument-data">[ +000.00 /S ]</span>
+            </div>
+
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_GPS}}">GPS:</span>
+                <span id="gps-display" class="instrument-data">[ 000.00 &nbsp;/S ]</span>
+            </div>
+            <div class="instrument-segment">
+                <span class="instrument-label" title="{{TOOLTIP_CORES}}">CORES:</span>
+                <span id="cores-display" class="instrument-data">[ 00 ]</span>
+            </div>
+        </div>
+        <div class="connection-status">
             <span id="status-dot" class="dot"></span>
             <span id="status-text">Disconnected</span>
         </div>
     </div>
+    </div>
 
-    <script>
-        const countEl = document.getElementById('count');
-        const genEl = document.getElementById('generation');
-        const runBtn = document.getElementById('run-btn');
-        const stepBtn = document.getElementById('step-btn');
-        const stopBtn = document.getElementById('stop-btn');
-        const resetBtn = document.getElementById('reset-btn');
-        const quitBtn = document.getElementById('quit-btn');
-        const patternSelect = document.getElementById('pattern-select');
-        const zoomInBtn = document.getElementById('zoom-in-btn');
-        const zoomOutBtn = document.getElementById('zoom-out-btn');
-
-        const statusDot = document.getElementById('status-dot');
-        const statusText = document.getElementById('status-text');
-        const canvas = document.getElementById('sim-canvas');
-        const ctx = canvas.getContext('2d');
-
-        let socket;
-        let scale = 10;
-        let isRunning = false;
-        let lastState = null;
-        let currentGen = 0n;
-
-        // Panning State
-        let offsetX = 0;
-        let offsetY = 0;
-        let isDragging = false;
-        let lastMouseX = 0;
-        let lastMouseY = 0;
-
-        canvas.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            lastMouseX = e.clientX;
-            lastMouseY = e.clientY;
-            canvas.style.cursor = 'grabbing';
-        });
-
-        window.addEventListener('mousemove', (e) => {
-            if (isDragging) {
-                const dx = e.clientX - lastMouseX;
-                const dy = e.clientY - lastMouseY;
-                offsetX += dx;
-                offsetY += dy;
-                lastMouseX = e.clientX;
-                lastMouseY = e.clientY;
-                if (lastState) renderCells(lastState.data, lastState.offset);
-            }
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (isDragging) {
-                isDragging = false;
-                canvas.style.cursor = 'default';
-                requestState();
-            }
-        });
-
-        canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const delta = -Math.sign(e.deltaY);
-            updateZoom(delta);
-        }, { passive: false });
-
-        function resizeCanvas() {
-            canvas.width = canvas.parentElement.clientWidth;
-            canvas.height = canvas.parentElement.clientHeight;
-            if (lastState) {
-                renderCells(lastState.data, lastState.offset);
-            }
-            requestState();
-        }
-        window.onresize = resizeCanvas;
-        resizeCanvas();
-
-        function renderCells(data, offset) {
-            lastState = { data, offset };
-
-            const gen = data.getBigUint64(offset, true);
-            currentGen = gen;
-            const total = data.getBigUint64(offset + 8, true);
-            isRunning = data.getUint8(offset + 16) === 1;
-            const recordCount = data.getBigUint64(offset + 17, true);
-
-            genEl.innerText = gen.toString();
-            countEl.innerText = total.toLocaleString();
-
-            runBtn.disabled = isRunning;
-            stopBtn.disabled = !isRunning;
-            resetBtn.disabled = isRunning;
-            stepBtn.disabled = isRunning;
-            patternSelect.disabled = isRunning;
-
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            const centerX = canvas.width / 2 + offsetX;
-            const centerY = canvas.height / 2 + offsetY;
-            const size = scale <= 1 ? scale : scale - 1;
-
-            let recordsOffset = offset + 25;
-            for (let i = 0; i < Number(recordCount); i++) {
-                const x = Number(data.getBigInt64(recordsOffset, true));
-                const y = Number(data.getBigInt64(recordsOffset + 16, true));
-                const state = data.getUint8(recordsOffset + 32);
-                recordsOffset += 33;
-
-                let color;
-                switch (state) {
-                    case 0b11: color = '#3b82f6'; break;
-                    case 0b10: color = '#10b981'; break;
-                    case 0b01: color = '#ef4444'; break;
-                    default: continue;
-                }
-
-                ctx.fillStyle = color;
-                ctx.fillRect(centerX + x * scale, centerY + y * scale, size, size);
-            }
-        }
-
-        function sendRequest(tag, payload = null) {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-            let buf;
-            if (payload instanceof Uint8Array) {
-                buf = new Uint8Array(1 + payload.length);
-                buf[0] = tag;
-                buf.set(payload, 1);
-            } else {
-                buf = new Uint8Array([tag]);
-            }
-            socket.send(buf);
-        }
-
-        function requestState() {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-            // Construct Request::GetState (0x03)
-            const req = new ArrayBuffer(74);
-            const view = new DataView(req);
-            view.setUint8(0, 0x03);
-            view.setBigUint64(1, currentGen, true);
-            view.setUint8(9, 1); // Has Viewport
-
-            // Calculate visible bounds
-            const cx = canvas.width / 2 + offsetX;
-            const cy = canvas.height / 2 + offsetY;
-
-            const min_x = Math.floor((0 - cx) / scale) - 1;
-            const max_x = Math.ceil((canvas.width - cx) / scale) + 1;
-            const min_y = Math.floor((0 - cy) / scale) - 1;
-            const max_y = Math.ceil((canvas.height - cy) / scale) + 1;
-
-            setI128(view, 10, min_x);
-            setI128(view, 26, min_y);
-            setI128(view, 42, max_x);
-            setI128(view, 58, max_y);
-
-            socket.send(req);
-        }
-
-        function setI128(view, offset, val) {
-            const valBig = BigInt(val);
-            const low = valBig;
-            const high = valBig < 0n ? -1n : 0n; // Simple Sign Extension for Safe Integer range
-            view.setBigInt64(offset, low, true);
-            view.setBigInt64(offset + 8, high, true);
-        }
-
-        function connect() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            // Assuming localhost dev if host is empty/file
-            const host = window.location.host || 'localhost:8080';
-            socket = new WebSocket(`${protocol}//${host}/ws`);
-            socket.binaryType = 'arraybuffer';
-
-            socket.onopen = () => {
-                statusDot.classList.add('connected');
-                statusText.innerText = 'Connected';
-            };
-
-            socket.onmessage = (event) => {
-                const data = new DataView(event.data);
-                const tag = data.getUint8(0);
-
-                if (tag === 0x01) { // SnapshotAvailable
-                    const gen = data.getBigUint64(1, true);
-                    if (gen === 0n && currentGen !== 0n) {
-                        offsetX = 0;
-                        offsetY = 0;
-                    }
-                    currentGen = gen;
-                    requestState();
-                } else if (tag === 0x02) { // BinaryState
-                    renderCells(data, 9);
-                } else if (tag === 0x03) { // Error
-                    const len = data.getUint32(1, true);
-                    const msg = new TextDecoder().decode(new Uint8Array(event.data, 5, len));
-                    console.error("Server Error:", msg);
-                }
-            };
-
-            socket.onclose = () => {
-                statusDot.classList.remove('connected');
-                statusText.innerText = 'Disconnected - retrying...';
-                setTimeout(connect, 2000);
-            };
-        }
-
-        runBtn.onclick = () => sendRequest(0x04);
-        stepBtn.onclick = () => sendRequest(0x01);
-        stopBtn.onclick = () => sendRequest(0x05);
-        resetBtn.onclick = () => sendRequest(0x02);
-        quitBtn.onclick = () => {
-            if (confirm("Shutdown server?")) {
-                sendRequest(0x07);
-            }
-        };
-
-        patternSelect.onchange = (e) => {
-            const pattern = e.target.value;
-            if (!pattern) return;
-
-            const bytes = new TextEncoder().encode(pattern);
-            const payload = new Uint8Array(4 + bytes.length);
-            new DataView(payload.buffer).setUint32(0, bytes.length, true);
-            payload.set(bytes, 4);
-
-            sendRequest(0x06, payload);
-            patternSelect.value = "";
-        };
-
-        function updateZoom(delta) {
-            scale = Math.max(1, Math.min(32, scale + delta));
-            if (lastState) {
-                renderCells(lastState.data, lastState.offset);
-            }
-            requestState();
-        }
-
-        zoomInBtn.onclick = () => updateZoom(1);
-        zoomOutBtn.onclick = () => updateZoom(-1);
-
-        window.addEventListener('keydown', (e) => {
-            if (e.key === '+' || e.key === '=') updateZoom(1);
-            if (e.key === '-') updateZoom(-1);
-        });
-
-        connect();
-    </script>
+    <script type="module" src="dashboard.js?v=3"></script>
 </body>
 
 </html>

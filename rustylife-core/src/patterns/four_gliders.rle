@@ -1,0 +1,5 @@
+#N Four Gliders
+#C Four gliders moving outwards from the center.
+#C Generated for stability testing.
+x = 7, y = 7, rule = B3/S23
+3ob3o$o5bo$bo3bo2$bo3bo$o5bo$3ob3o!

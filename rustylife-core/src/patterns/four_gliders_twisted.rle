@@ -1,0 +1,5 @@
+#N Four Gliders (Twisted)
+#C Four gliders moving outwards from the center.
+#C Generated for stability testing.
+x = 7, y = 7, rule = B3/S23
+2o2b3o$obo3bo$o4bo2$bo4bo$o3bobo$3o2b2o!

@@ -1,9 +1,8 @@
 use crate::cell::{Cell, CellState};
 use crate::scratchpad::Scratchpad;
 use crate::space::SimulationSpace;
-use crate::tree::CellNode;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 
@@ -42,13 +41,25 @@ pub struct SnapshotRecord {
 }
 
 pub enum IoTask {
-    /// Generate a binary snapshot and notifying subscribers.
+    /// Generate a binary snapshot and notifies subscribers.
     Snapshot {
         generation: u64,
         living_count: u64,
         is_running: bool,
         /// Captured records grouped by bucket.
         buckets: Vec<Vec<SnapshotRecord>>,
+        /// The index of the record buffer this snapshot came from.
+        buffer_idx: usize,
+        /// Generation Session ID to prevent ghost snapshots.
+        epoch: u64,
+        gps: f64,
+        work_rate: f64,
+        net_rate: f64,
+    },
+    /// Return the used bucket vectors back to the engine's pool.
+    ReturnBuffers {
+        buckets: Vec<Vec<SnapshotRecord>>,
+        buffer_idx: usize,
     },
     /// Shutdown the I/O thread.
     Quit,
@@ -141,6 +152,58 @@ impl WorkQueue {
     }
 }
 
+/// Internal telemetry data for rate calculations
+pub struct Telemetry {
+    pub start_time: std::time::Instant,
+    pub last_tick: std::time::Instant,
+    pub last_gen: u64,
+    pub gps: f64,
+    pub work_rate_ema: f64,
+    pub net_rate_ema: f64,
+}
+
+impl Telemetry {
+    pub fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            start_time: now,
+            last_tick: now,
+            last_gen: 0,
+            gps: 0.0,
+            work_rate_ema: 0.0,
+            net_rate_ema: 0.0,
+        }
+    }
+
+    pub fn update(&mut self, current_gen: u64, work: u64, net: i64) {
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f64();
+
+        // Update at most 10 times a second to ensure stability or on every step?
+        // Let's update every step but smooth heavy.
+        if dt > 0.0 {
+            let limit_dt = dt.max(0.001); // Prevent div by zero
+            let gen_diff = current_gen.saturating_sub(self.last_gen) as f64;
+            let current_gps = gen_diff / limit_dt;
+
+            // Simple Moving Average / EMA
+            let alpha = 0.1; // Smooth factor
+            self.gps = current_gps * alpha + self.gps * (1.0 - alpha);
+
+            // Work Rate = Work (Events) / dt
+            let current_work_rate = work as f64 / limit_dt;
+            self.work_rate_ema = current_work_rate * alpha + self.work_rate_ema * (1.0 - alpha);
+
+            // Net Rate = Net (Change) / dt
+            let current_net_rate = net as f64 / limit_dt;
+            self.net_rate_ema = current_net_rate * alpha + self.net_rate_ema * (1.0 - alpha);
+
+            self.last_tick = now;
+            self.last_gen = current_gen;
+        }
+    }
+}
+
 /// Interface for external components to observe simulation progress.
 pub trait EngineSubscriber: Send + Sync {
     /// Notified when a new snapshot is ready in memory.
@@ -153,36 +216,82 @@ pub trait EngineSubscriber: Send + Sync {
 /// Thread-safe circular buffer for generation snapshots.
 pub struct SnapshotStore {
     snapshots: RwLock<std::collections::BTreeMap<u64, Arc<Vec<u8>>>>,
+    pool: Mutex<Vec<Vec<u8>>>,
     max_capacity: usize,
+    epoch: AtomicU64,
 }
 
 impl SnapshotStore {
     fn new(max_capacity: usize) -> Self {
         Self {
             snapshots: RwLock::new(std::collections::BTreeMap::new()),
+            pool: Mutex::new(Vec::with_capacity(max_capacity)),
             max_capacity,
+            epoch: AtomicU64::new(0),
         }
     }
 
-    pub fn insert(&self, generation: u64, data: Arc<Vec<u8>>) {
-        let mut g = self.snapshots.write().unwrap();
+    pub fn get_buffer(&self, capacity: usize) -> Vec<u8> {
+        let mut p = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut buf) = p.pop() {
+            if buf.capacity() >= capacity {
+                buf.clear();
+                return buf;
+            }
+        }
+        Vec::with_capacity(capacity)
+    }
+
+    pub fn get_latest(&self) -> Option<(u64, Arc<Vec<u8>>)> {
+        let g = self.snapshots.read().unwrap_or_else(|e| e.into_inner());
+        g.last_key_value().map(|(k, v)| (*k, v.clone()))
+    }
+
+    pub fn insert(&self, generation: u64, data: Arc<Vec<u8>>, epoch: u64) {
+        // Enforce Epoch: Reject stale snapshots
+        if epoch < self.epoch.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut g = self.snapshots.write().unwrap_or_else(|e| e.into_inner());
+        // Double check inside lock in case clear() happened just now
+        if epoch < self.epoch.load(Ordering::SeqCst) {
+            return;
+        }
         g.insert(generation, data);
 
         // Keep last N generations
         if g.len() > self.max_capacity {
             let first_key = *g.keys().next().unwrap();
-            g.remove(&first_key);
+            if let Some(evicted) = g.remove(&first_key) {
+                drop(g);
+                if let Ok(vec) = Arc::try_unwrap(evicted) {
+                    let mut p = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+                    p.push(vec);
+                }
+            }
         }
     }
 
     pub fn get(&self, generation: u64) -> Option<Arc<Vec<u8>>> {
-        let g = self.snapshots.read().unwrap();
+        let g = self.snapshots.read().unwrap_or_else(|e| e.into_inner());
         g.get(&generation).cloned()
     }
 
-    pub fn clear(&self) {
+    pub fn clear(&self, new_epoch: u64) {
+        // Update epoch first to block new inserts
+        self.epoch.store(new_epoch, Ordering::SeqCst);
         let mut g = self.snapshots.write().unwrap();
         g.clear();
+    }
+
+    pub fn latest_generation(&self) -> u64 {
+        let g = self.snapshots.read().unwrap_or_else(|e| e.into_inner());
+        g.keys().next_back().cloned().unwrap_or(0)
+    }
+
+    pub fn get_all_generations(&self) -> Vec<u64> {
+        let g = self.snapshots.read().unwrap_or_else(|e| e.into_inner());
+        g.keys().cloned().collect()
     }
 }
 
@@ -198,14 +307,17 @@ pub struct SimulationEngine {
     pub scratchpad: Arc<Scratchpad>,
     _worker_handles: Mutex<Vec<thread::JoinHandle<()>>>,
     work_queue: Arc<WorkQueue>,
+    pub living_count: AtomicU64,
+    pub work: AtomicU64,
+    pub net: AtomicI64,
+    pub generation: AtomicU64,
+    pub telemetry: Mutex<Telemetry>,
     subscribers: Arc<RwLock<Vec<Arc<dyn EngineSubscriber>>>>,
     stopping: AtomicBool,
     tainted: AtomicBool,
     pool_size: usize,
     /// Memory store for recent binary snapshots.
     pub snapshots: Arc<SnapshotStore>,
-    generation: AtomicUsize,
-    pub living_count: AtomicU64,
     /// The last seed pattern applied, used for Reset.
     pub last_seed: Mutex<Option<String>>,
     io_tx: std::sync::mpsc::Sender<IoTask>,
@@ -215,6 +327,10 @@ pub struct SimulationEngine {
     record_buffers: [Vec<Mutex<Vec<SnapshotRecord>>>; 2],
     /// The target generation to stop at (u64::MAX if unlimited).
     target_generation: AtomicU64,
+    /// Counter to invalidate old IO tasks after a Reset/Seed.
+    epoch: AtomicU64,
+    /// Dynamic registry of available patterns.
+    pub patterns: RwLock<Vec<crate::patterns::Pattern>>,
 }
 
 impl SimulationEngine {
@@ -236,8 +352,11 @@ impl SimulationEngine {
             tainted: AtomicBool::new(false),
             pool_size,
             snapshots: snapshots.clone(),
-            generation: AtomicUsize::new(0),
+            generation: AtomicU64::new(0),
             living_count: AtomicU64::new(0),
+            work: AtomicU64::new(0),
+            net: AtomicI64::new(0),
+            telemetry: Mutex::new(Telemetry::new()),
             last_seed: Mutex::new(None),
             io_tx,
             _io_handle: Mutex::new(None),
@@ -251,63 +370,19 @@ impl SimulationEngine {
                     .collect(),
             ],
             target_generation: AtomicU64::new(u64::MAX),
+            epoch: AtomicU64::new(0),
+            patterns: RwLock::new(crate::patterns::get_builtin_patterns()),
         });
 
         // Setup Background I/O thread
         let engine_for_io = Arc::clone(&engine);
 
-        let io_handle = thread::spawn(move || {
-            while let Ok(task) = io_rx.recv() {
-                match task {
-                    IoTask::Quit => break,
-                    IoTask::Snapshot {
-                        generation,
-                        living_count,
-                        is_running,
-                        buckets,
-                    } => {
-                        let record_count = buckets.iter().map(|b| b.len()).sum::<usize>() as u64;
-                        let mut buffer = Vec::with_capacity(64 + (record_count as usize * 33));
-
-                        let mut hasher = crc32fast::Hasher::new();
-                        let mut write_le = |val: &[u8]| {
-                            buffer.extend_from_slice(val);
-                            hasher.update(val);
-                        };
-
-                        // Header
-                        write_le(&generation.to_le_bytes());
-                        write_le(&living_count.to_le_bytes());
-                        write_le(&[if is_running { 1 } else { 0 }]);
-                        write_le(&record_count.to_le_bytes());
-
-                        for bucket_records in buckets {
-                            for rec in bucket_records {
-                                let mut buf = [0u8; 33];
-                                buf[0..16].copy_from_slice(&rec.x.to_le_bytes());
-                                buf[16..32].copy_from_slice(&rec.y.to_le_bytes());
-                                buf[32] = rec.state;
-                                write_le(&buf);
-                            }
-                        }
-
-                        // CRC32
-                        let crc = hasher.finalize();
-                        buffer.extend_from_slice(&crc.to_le_bytes());
-
-                        let shared_data = Arc::new(buffer);
-                        engine_for_io
-                            .snapshots
-                            .insert(generation, shared_data.clone());
-
-                        let subs = engine_for_io.subscribers.read().unwrap();
-                        for s in subs.iter() {
-                            s.on_snapshot_available(generation, shared_data.clone());
-                        }
-                    }
-                }
-            }
-        });
+        let io_handle = thread::Builder::new()
+            .name("Simulation-IO".into())
+            .spawn(move || {
+                Self::simulation_io_loop(engine_for_io, io_rx);
+            })
+            .expect("Failed to spawn IO thread");
 
         *engine._io_handle.lock().unwrap() = Some(io_handle);
 
@@ -329,6 +404,7 @@ impl SimulationEngine {
                                 return true; // Signal to break loop
                             }
                             Tasks::Stop => {
+                                let _lock = engine_arc.transition_lock.lock().unwrap();
                                 engine_arc.stopping.store(true, Ordering::SeqCst);
                                 engine_arc.tainted.store(true, Ordering::SeqCst);
                                 engine_arc.work_queue.purge();
@@ -337,9 +413,17 @@ impl SimulationEngine {
                                 }
                             }
                             Tasks::Start => {
-                                let _lock = engine_arc.transition_lock.lock().unwrap();
-                                engine_arc.stopping.store(false, Ordering::SeqCst);
+                                // engine.stopping.store(false, Ordering::SeqCst); // REMOVED: Managed by public API
+                                if engine_arc.stopping.load(Ordering::SeqCst) {
+                                    // If we were stopped while this task was in queue, abort.
+                                    engine_arc.work_queue.finish_work();
+                                    return true;
+                                }
                                 if engine_arc.work_queue.in_flight_count() == 1 {
+                                    // Eager Advance: Prepare destination generation before work starts
+                                    engine_arc.space.advance_generation();
+                                    engine_arc.generation.fetch_add(1, Ordering::SeqCst);
+
                                     // Do NOT reset target_generation here, as this task is recycled for the internal loop.
                                     // Public start() sets it to MAX. StartGenerations() sets it to specific target.
 
@@ -349,28 +433,47 @@ impl SimulationEngine {
                                         engine_arc.tainted.store(false, Ordering::SeqCst);
                                     }
                                     Self::initiate_spread(&engine_arc);
+                                } else {
+                                    engine_arc.work_queue.enqueue(Tasks::Start);
                                 }
                             }
                             Tasks::StartGenerations(count) => {
-                                let _lock = engine_arc.transition_lock.lock().unwrap();
                                 let current = engine_arc.generation.load(Ordering::SeqCst) as u64;
                                 engine_arc
                                     .target_generation
                                     .store(current + count, Ordering::SeqCst);
-                                engine_arc.stopping.store(false, Ordering::SeqCst);
+                                // engine_arc.stopping.store(false, Ordering::SeqCst); // REMOVED: Managed by public API
+
+                                if engine_arc.stopping.load(Ordering::SeqCst) {
+                                    // If we were stopped while this task was in queue, abort.
+                                    engine_arc.work_queue.finish_work();
+                                    return true;
+                                }
 
                                 if engine_arc.work_queue.in_flight_count() == 1 {
+                                    // Eager Advance
+                                    engine_arc.space.advance_generation();
+                                    engine_arc.generation.fetch_add(1, Ordering::SeqCst);
+
                                     if engine_arc.tainted.load(Ordering::SeqCst) {
                                         engine_arc.scratchpad.clear();
                                         engine_arc.space.repair();
                                         engine_arc.tainted.store(false, Ordering::SeqCst);
                                     }
                                     Self::initiate_spread(&engine_arc);
+                                } else {
+                                    engine_arc
+                                        .work_queue
+                                        .enqueue(Tasks::StartGenerations(*count));
                                 }
                             }
                             Tasks::Step => {
                                 let _lock = engine_arc.transition_lock.lock().unwrap();
                                 if engine_arc.work_queue.in_flight_count() == 1 {
+                                    // Eager Advance
+                                    engine_arc.space.advance_generation();
+                                    engine_arc.generation.fetch_add(1, Ordering::SeqCst);
+
                                     if engine_arc.tainted.load(Ordering::SeqCst) {
                                         engine_arc.scratchpad.clear();
                                         engine_arc.space.repair();
@@ -388,23 +491,50 @@ impl SimulationEngine {
                             }
                             Tasks::Reset => {
                                 let _lock = engine_arc.transition_lock.lock().unwrap();
-                                engine_arc.snapshots.clear();
-                                engine_arc.space.clear();
-                                engine_arc.generation.store(0, Ordering::SeqCst);
-                                engine_arc.living_count.store(0, Ordering::SeqCst);
-                                let seed = engine_arc.last_seed.lock().unwrap().clone();
-                                if let Some(pattern) = seed {
-                                    Self::apply_seed(&engine_arc, &pattern);
+                                // Race Condition Fix: Reset must ensure exclusivity.
+                                engine_arc.stopping.store(true, Ordering::SeqCst);
+                                engine_arc.work_queue.purge();
+
+                                if engine_arc.work_queue.in_flight_count() > 1 {
+                                    engine_arc.work_queue.enqueue(Tasks::Reset);
+                                } else {
+                                    let new_epoch =
+                                        engine_arc.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+                                    engine_arc.snapshots.clear(new_epoch);
+                                    engine_arc.space.clear();
+                                    engine_arc.generation.store(0, Ordering::SeqCst);
+                                    engine_arc.living_count.store(0, Ordering::SeqCst);
+                                    let seed = engine_arc.last_seed.lock().unwrap().clone();
+                                    if let Some(pattern) = seed {
+                                        Self::apply_seed(&engine_arc, &pattern);
+                                    }
+                                    Self::trigger_initial_snapshot(&engine_arc);
                                 }
-                                Self::trigger_initial_snapshot(&engine_arc);
                             }
                             Tasks::Seed(pattern) => {
                                 let _lock = engine_arc.transition_lock.lock().unwrap();
-                                engine_arc.space.clear();
-                                engine_arc.generation.store(0, Ordering::SeqCst);
-                                *engine_arc.last_seed.lock().unwrap() = Some(pattern.clone());
-                                Self::apply_seed(&engine_arc, &pattern);
-                                Self::trigger_initial_snapshot(&engine_arc);
+                                // Race Condition Fix: Reset must ensure exclusivity.
+                                // 1. Signal Stop to prevent new work generation.
+                                engine_arc.stopping.store(true, Ordering::SeqCst);
+                                // 2. Purge existing work (Step, Spread, Commit).
+                                engine_arc.work_queue.purge();
+
+                                // 3. Wait for workers to drain.
+                                // If other tasks are still in flight (e.g. finishing a Spread),
+                                // re-enqueue Seed to try again later.
+                                if engine_arc.work_queue.in_flight_count() > 1 {
+                                    engine_arc.work_queue.enqueue(Tasks::Seed(pattern.clone()));
+                                } else {
+                                    // Quiescent State: We are the only active task.
+                                    let new_epoch =
+                                        engine_arc.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+                                    engine_arc.snapshots.clear(new_epoch);
+                                    engine_arc.space.clear();
+                                    engine_arc.generation.store(0, Ordering::SeqCst);
+                                    *engine_arc.last_seed.lock().unwrap() = Some(pattern.clone());
+                                    Self::apply_seed(&engine_arc, &pattern);
+                                    Self::trigger_initial_snapshot(&engine_arc);
+                                }
                             }
                         };
                         false // Do not break
@@ -437,7 +567,10 @@ impl SimulationEngine {
     }
 
     fn handle_emergent_transition(engine: &Arc<Self>, completed_task: &Tasks) {
-        let _lock = engine.transition_lock.lock().unwrap();
+        let _lock = engine
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         Self::handle_transition_internal(engine, completed_task);
     }
 
@@ -455,28 +588,44 @@ impl SimulationEngine {
             Tasks::CommitBatch(_, _) => {
                 if engine.work_queue.in_flight_count() == 0 {
                     // Generation cycle complete.
-                    engine.space.advance_generation();
-                    let generation_count = engine.generation.fetch_add(1, Ordering::SeqCst) + 1;
+                    // Snapshot the generation that was just committed into the Current mask.
+                    let generation_count = engine.generation.load(Ordering::SeqCst);
+                    if generation_count == 0 {
+                        // Spurious transition or race condition led here without generation advance.
+                        return;
+                    }
 
                     // Offload Collected Records
                     // Use the buffer that was just populated during the commit of this generation.
-                    let buffer_idx = ((generation_count - 1) % 2) as usize;
-                    let captured_buckets: Vec<Vec<SnapshotRecord>> = engine.record_buffers
-                        [buffer_idx]
-                        .iter()
-                        .map(|m| {
-                            let mut g = m.lock().unwrap();
-                            let vec = g.clone();
-                            g.clear();
-                            vec
-                        })
-                        .collect();
+                    let buffer_idx = (generation_count % 2) as usize;
+                    let mut captured_buckets =
+                        Vec::with_capacity(engine.record_buffers[buffer_idx].len());
+                    for m in &engine.record_buffers[buffer_idx] {
+                        let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+                        let vec = std::mem::replace(&mut *g, Vec::new());
+                        captured_buckets.push(vec);
+                    }
+
+                    // Update Telemetry
+                    let work_count = engine.work.swap(0, Ordering::Relaxed);
+                    let net_count = engine.net.swap(0, Ordering::Relaxed);
+
+                    let (gps, work_rate, net_rate) = {
+                        let mut tel = engine.telemetry.lock().unwrap();
+                        tel.update(generation_count, work_count, net_count);
+                        (tel.gps, tel.work_rate_ema, tel.net_rate_ema)
+                    };
 
                     let _ = engine.io_tx.send(IoTask::Snapshot {
                         generation: generation_count as u64,
                         living_count: engine.living_count.load(Ordering::SeqCst),
                         buckets: captured_buckets,
                         is_running: !engine.stopping.load(Ordering::SeqCst),
+                        buffer_idx,
+                        epoch: engine.epoch.load(Ordering::SeqCst),
+                        gps,
+                        work_rate,
+                        net_rate,
                     });
 
                     if !engine.stopping.load(Ordering::SeqCst) {
@@ -535,20 +684,30 @@ impl SimulationEngine {
         thread_idx: usize,
     ) {
         let storage = engine.space.storage();
-        let current_mask = engine.space.mask.read().current_state_mask();
+        // Read from last generation's state to propagate into the current generation
+        let source_mask = engine.space.mask.read().last_state_mask();
 
         for bucket_idx in bucket_start..bucket_end {
             if bucket_idx >= storage.buckets.len() {
                 break;
             }
-            let bucket_lock = storage.buckets[bucket_idx].read().unwrap();
-            if let Some(ref node) = bucket_lock.root {
-                Self::spread_recursive(node, engine, current_mask, thread_idx);
+            let bucket_lock = storage.buckets[bucket_idx]
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(root) = bucket_lock.root {
+                Self::spread_recursive(&bucket_lock, root, engine, source_mask, thread_idx);
             }
         }
     }
 
-    fn spread_recursive(node: &CellNode, engine: &Arc<Self>, mask: usize, thread_idx: usize) {
+    fn spread_recursive(
+        tree: &crate::tree::CellTree,
+        idx: crate::tree::NodeIndex,
+        engine: &Arc<Self>,
+        mask: usize,
+        thread_idx: usize,
+    ) {
+        let node = tree.arena.get(idx);
         if node.cell.state(mask) == CellState::Alive {
             let (x, y) = node.cell.coordinates();
             // Spread to all 8 neighbors (skip self for correct neighbor counting)
@@ -562,11 +721,11 @@ impl SimulationEngine {
             }
         }
 
-        if let Some(ref left) = node.left {
-            Self::spread_recursive(left, engine, mask, thread_idx);
+        if let Some(left) = node.left {
+            Self::spread_recursive(tree, left, engine, mask, thread_idx);
         }
-        if let Some(ref right) = node.right {
-            Self::spread_recursive(right, engine, mask, thread_idx);
+        if let Some(right) = node.right {
+            Self::spread_recursive(tree, right, engine, mask, thread_idx);
         }
     }
 
@@ -598,42 +757,62 @@ impl SimulationEngine {
         let storage = space.storage();
         let masks = space.mask.read();
         let cur = masks.current_state_mask();
-        let next = masks.next_state_mask();
         let last = masks.last_state_mask();
+        let next = masks.next_state_mask();
 
         for bucket_idx in bucket_start..bucket_end {
             if bucket_idx >= storage.buckets.len() {
                 break;
             }
 
-            let mut incoming = engine.scratchpad.get_column(bucket_idx);
+            let mut incoming = Vec::with_capacity(1024);
+            engine.scratchpad.get_column_into(bucket_idx, &mut incoming);
+
             incoming.sort_unstable_by(|a, b| {
                 crate::tree::CellTree::compare_coords((a.x, a.y), (b.x, b.y))
             });
 
-            let coords: Vec<(i128, i128)> = incoming.iter().map(|c| (c.x, c.y)).collect();
+            let mut coords = Vec::with_capacity(incoming.len());
+            for c in &incoming {
+                coords.push((c.x, c.y));
+            }
 
-            let mut bucket_lock = storage.buckets[bucket_idx].write().unwrap();
+            let mut bucket_lock = storage.buckets[bucket_idx]
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
 
             // Unified Commit & Prune:
-            // 1. Ensure nodes exist and increment neighbor counts
+            // 1. Ensure nodes exist and increment neighbor counts for the SOURCE mask (last)
+            // so that calculate_next_state can use the correct neighborhood density.
             bucket_lock.apply_batch(
                 &coords,
-                |x, y| Cell::new(x, y, CellState::Dead, cur),
-                |cell| cell.increment_neighbor_count(cur),
+                |x, y| Cell::new(x, y, CellState::Dead, last),
+                |cell| cell.increment_neighbor_count(last),
             );
 
-            // 2. Perform state update, counting, and natural pruning
-            let buffer_idx = (engine.generation.load(Ordering::Relaxed) % 2) as usize;
+            // 2. Perform state update (writing into current mask) and natural pruning.
+            let buffer_idx = (engine.generation.load(Ordering::SeqCst) % 2) as usize;
             let mut records = engine.record_buffers[buffer_idx][bucket_idx]
                 .lock()
-                .unwrap();
+                .unwrap_or_else(|e| e.into_inner());
 
-            bucket_lock.commit_and_prune(cur, next, last, |cell, next_state| {
+            bucket_lock.commit_and_prune(last, cur, next, |cell, next_state| {
+                let prev_state = cell.state(last);
+
+                // Telemetry: Detect state changes
+                if prev_state != next_state {
+                    engine.work.fetch_add(1, Ordering::Relaxed);
+                    if next_state == CellState::Alive {
+                        engine.net.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        engine.net.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
+
                 if next_state == CellState::Alive {
                     engine.living_count.fetch_add(1, Ordering::Relaxed);
                 }
-                if let Some(state) = cell.presenter_view(next, cur, last) {
+                if let Some(state) = cell.presenter_view(cur, last, next) {
                     let (x, y) = cell.coordinates();
                     records.push(SnapshotRecord { x, y, state });
                 }
@@ -658,12 +837,36 @@ impl SimulationEngine {
 
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
-        // Taint the state because we are about to purge pending work
+        // Synchronous Graceful Stop: wait for the current generation boundary.
+        // This ensures the space is in a consistent state for observation.
+        let start = std::time::Instant::now();
+        while self.work_queue.in_flight_count() > 0 {
+            if start.elapsed().as_secs() > 5 {
+                eprintln!(
+                    "CRITICAL: Engine Stop timed out! Leaked in_flight_count: {}",
+                    self.work_queue.in_flight_count()
+                );
+                break;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// Abort the simulation immediately, purging all pending work and tainting
+    /// the state. This is useful for emergency resets or testing recovery.
+    pub fn abort(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         self.tainted.store(true, Ordering::SeqCst);
         self.work_queue.purge();
-        // We still enqueue Stop to ensure any remaining tasks that might pick it up do so,
-        // though purge likely cleared it.
-        self.work_queue.enqueue(Tasks::Stop);
+        // Wait for workers to finish current atomized task
+        while self.work_queue.in_flight_count() > 0 {
+            std::thread::yield_now();
+        }
+    }
+
+    /// Forcefully run a state repair cycle on the next step or start.
+    pub fn mark_tainted(&self) {
+        self.tainted.store(true, Ordering::SeqCst);
     }
 
     pub fn reset(&self) {
@@ -672,6 +875,13 @@ impl SimulationEngine {
 
     pub fn seed(&self, pattern: String) {
         self.work_queue.enqueue(Tasks::Seed(pattern));
+    }
+
+    pub fn register_pattern(&self, pattern: crate::patterns::Pattern) {
+        let mut patterns = self.patterns.write().unwrap();
+        patterns.push(pattern);
+        // Sort for UI consistency
+        patterns.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
     pub fn shutdown(&self) {
@@ -688,17 +898,30 @@ impl SimulationEngine {
         }
     }
 
-    fn apply_seed(engine: &Arc<SimulationEngine>, pattern: &str) {
-        match pattern {
-            "glider" => engine.space.seed_glider(0, 0),
-            "blinker" => engine.space.seed_blinker(0, 0),
-            "r-pentomino" => engine.space.seed_r_pentomino(0, 0),
-            "glider gun" => engine.space.seed_glider_gun(-20, -10),
-            "spaceship" => engine.space.seed_spaceship(0, 0),
-            "block" => engine.space.seed_block(0, 0),
-            "beehive" => engine.space.seed_beehive(0, 0),
-            "breeder 1" => engine.space.seed_breeder_1(-400, -150),
-            _ => eprintln!("Unknown seed pattern: {}", pattern),
+    pub fn get_catalog(&self) -> Vec<crate::PatternInfo> {
+        self.patterns
+            .read()
+            .unwrap()
+            .iter()
+            .map(|d| crate::PatternInfo {
+                name: d.name.clone(),
+                description: d.description.clone(),
+            })
+            .collect()
+    }
+
+    fn apply_seed(engine: &Arc<SimulationEngine>, pattern_name: &str) {
+        let patterns = engine.patterns.read().unwrap();
+        if let Some(pattern) = patterns
+            .iter()
+            .find(|d| d.name.eq_ignore_ascii_case(pattern_name))
+        {
+            match &pattern.source {
+                crate::patterns::PatternSource::Builtin(f) => f(&engine.space, 0, 0),
+                crate::patterns::PatternSource::Rle(rle) => engine.space.seed_from_rle(0, 0, rle),
+            }
+        } else {
+            eprintln!("Unknown seed pattern: {}", pattern_name);
         }
     }
 
@@ -708,16 +931,16 @@ impl SimulationEngine {
         let cur = guard.current_state_mask();
         let last = guard.last_state_mask();
         let next = guard.next_state_mask();
-
         let mut captured_buckets = Vec::new();
         let mut total_living = 0;
         let storage = engine.space.storage();
 
         for (_bucket_idx, bucket) in storage.buckets.iter().enumerate() {
-            let bucket_lock = bucket.read().unwrap();
+            let bucket_lock = bucket.read().unwrap_or_else(|e| e.into_inner());
             let mut records = Vec::new();
-            if let Some(ref root) = bucket_lock.root {
+            if let Some(root) = bucket_lock.root {
                 Self::collect_records_recursive(
+                    &bucket_lock,
                     root,
                     cur,
                     last,
@@ -734,19 +957,26 @@ impl SimulationEngine {
             living_count: total_living,
             buckets: captured_buckets,
             is_running: !engine.stopping.load(Ordering::SeqCst),
+            buffer_idx: usize::MAX, // Special value for initial snapshot
+            epoch: engine.epoch.load(Ordering::SeqCst),
+            gps: 0.0,
+            work_rate: 0.0,
+            net_rate: 0.0,
         });
 
         engine.living_count.store(total_living, Ordering::SeqCst);
     }
 
     fn collect_records_recursive(
-        node: &CellNode,
+        tree: &crate::tree::CellTree,
+        idx: crate::tree::NodeIndex,
         cur: usize,
         last: usize,
         next: usize,
         out: &mut Vec<SnapshotRecord>,
         living_count: &mut u64,
     ) {
+        let node = tree.arena.get(idx);
         if node.cell.state(cur) == CellState::Alive {
             *living_count += 1;
         }
@@ -754,23 +984,32 @@ impl SimulationEngine {
             let (x, y) = node.cell.coordinates();
             out.push(SnapshotRecord { x, y, state });
         }
-        if let Some(ref left) = node.left {
-            Self::collect_records_recursive(left, cur, last, next, out, living_count);
+        if let Some(left) = node.left {
+            Self::collect_records_recursive(tree, left, cur, last, next, out, living_count);
         }
-        if let Some(ref right) = node.right {
-            Self::collect_records_recursive(right, cur, last, next, out, living_count);
+        if let Some(right) = node.right {
+            Self::collect_records_recursive(tree, right, cur, last, next, out, living_count);
         }
     }
 
     pub fn step(&self) {
         let start_gen = self.generation();
-        if self.work_queue.in_flight_count() == 0 {
-            self.stopping.store(true, Ordering::SeqCst);
-            self.work_queue.enqueue(Tasks::Step);
-            // Wait for generation to advance
-            while self.generation() <= start_gen {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+
+        // Ensure we are stopped
+        self.stopping.store(true, Ordering::SeqCst);
+
+        // Wait for any pending tasks (like an in-flight Stop or previous generation remnants)
+        // to clear so that our Step task is guaranteed to be the next thing processed.
+        // This is critical for the "Repair Phase" triggered by step/start.
+        while self.work_queue.in_flight_count() > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        self.work_queue.enqueue(Tasks::Step);
+
+        // Wait for generation to advance
+        while self.generation() <= start_gen {
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
 
@@ -809,6 +1048,128 @@ impl SimulationEngine {
 
     pub fn is_stopped(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
+    }
+
+    #[inline(never)]
+    fn simulation_io_loop(engine: Arc<Self>, rx: std::sync::mpsc::Receiver<IoTask>) {
+        while let Ok(task) = rx.recv() {
+            match task {
+                IoTask::Quit => break,
+                IoTask::Snapshot {
+                    generation,
+                    living_count,
+                    is_running,
+                    buckets,
+                    buffer_idx,
+                    epoch,
+                    gps,
+                    work_rate,
+                    net_rate,
+                } => {
+                    let current_epoch = engine.epoch.load(Ordering::SeqCst);
+
+                    // Filter Ghost Snapshots
+                    if epoch != current_epoch {
+                        // Don't leak buffers! Return them.
+                        if buffer_idx < 2 {
+                            let _ = engine.io_tx.send(IoTask::ReturnBuffers {
+                                buckets,
+                                buffer_idx,
+                            });
+                        }
+                        continue;
+                    }
+                    let record_count = buckets.iter().map(|b| b.len()).sum::<usize>() as u64;
+
+                    // Construct Header
+                    let header = crate::Response::BinaryStateHeader {
+                        generation,
+                        total_cells: living_count,
+                        is_running,
+                        record_count,
+                        gps,
+                        work_rate,
+                        net_rate,
+                    };
+                    let json_header = serde_json::to_vec(&header).unwrap();
+                    let json_len = json_header.len() as u32;
+
+                    // Calculate Size: 4 (len) + JSON + Binary(Records * 33) + 4 (CRC)
+                    let total_size = 4 + json_header.len() + (record_count as usize * 33) + 4;
+                    let mut buffer = engine.snapshots.get_buffer(total_size);
+
+                    let mut hasher = crc32fast::Hasher::new();
+
+                    // 1. Length Prefix
+                    buffer.extend_from_slice(&json_len.to_le_bytes());
+
+                    // 2. JSON Header
+                    buffer.extend_from_slice(&json_header);
+
+                    // 3. Binary Payload
+                    // IMPORTANT: CRC usually covers only binary payload in our design for speed?
+                    // Let's check lib.rs... Yes: `crc32fast::hash(&buf[payload_start..payload_end])`
+                    // So we hash while writing the cells.
+
+                    let mut write_cell = |val: &[u8]| {
+                        buffer.extend_from_slice(val);
+                        hasher.update(val);
+                    };
+
+                    for bucket_records in &buckets {
+                        for rec in bucket_records {
+                            let mut buf = [0u8; 33];
+                            buf[0..16].copy_from_slice(&rec.x.to_le_bytes());
+                            buf[16..32].copy_from_slice(&rec.y.to_le_bytes());
+                            buf[32] = rec.state;
+                            write_cell(&buf);
+                        }
+                    }
+
+                    // 4. CRC32
+                    let crc = hasher.finalize();
+                    buffer.extend_from_slice(&crc.to_le_bytes());
+
+                    let shared_data = Arc::new(buffer);
+                    engine
+                        .snapshots
+                        .insert(generation, shared_data.clone(), epoch);
+
+                    let subs = engine.subscribers.read().unwrap();
+                    for s in subs.iter() {
+                        s.on_snapshot_available(generation, shared_data.clone());
+                    }
+
+                    // Return buffers back to the engine
+                    let _ = engine.io_tx.send(IoTask::ReturnBuffers {
+                        buckets,
+                        buffer_idx,
+                    });
+                }
+                IoTask::ReturnBuffers {
+                    buckets,
+                    buffer_idx,
+                } => {
+                    if buffer_idx < 2 {
+                        for (i, mut vec) in buckets.into_iter().enumerate() {
+                            vec.clear();
+                            let mut lock = engine.record_buffers[buffer_idx][i]
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+
+                            // CRITICAL FIX: Buffer Recycling Race
+                            // Only recycle the buffer if the slot is EMPTY.
+                            // If it's not empty, the Engine has already started writing the next generation
+                            // into this slot (wrap-around). Overwriting it would corrupt the new data.
+                            if lock.is_empty() && lock.capacity() < vec.capacity() {
+                                *lock = vec;
+                            }
+                            // Else: Engine is using it. Discard `vec` (drop) to preserve data integrity.
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

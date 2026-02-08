@@ -6,13 +6,16 @@ use rustylife_core::{
 use std::sync::{Arc, Mutex};
 
 // Helper struct that we can use for testing within the test file
+// Helper struct that we can use for testing within the test file
 struct TestPresenter {
-    received_packet: Option<BinaryPacket>,
+    received_generation: Option<u64>,
+    received_cells: Vec<((i128, i128), u8)>,
 }
 
 impl SimulationPresenter for TestPresenter {
-    fn update_state(&mut self, packet: BinaryPacket) {
-        self.received_packet = Some(packet);
+    fn update_state(&mut self, packet: BinaryPacket<'_>) {
+        self.received_generation = Some(packet.generation);
+        self.received_cells = packet.cells().collect();
     }
 }
 
@@ -39,7 +42,8 @@ fn test_presenter_receives_engine_snapshot() {
     let engine = SimulationEngine::new(space.clone(), 1);
 
     let presenter = Arc::new(Mutex::new(TestPresenter {
-        received_packet: None,
+        received_generation: None,
+        received_cells: Vec::new(),
     }));
     let subscriber = Arc::new(PresenterSubscriber {
         presenter: presenter.clone(),
@@ -66,7 +70,7 @@ fn test_presenter_receives_engine_snapshot() {
     while start.elapsed().as_secs() < 5 {
         {
             let p = presenter.lock().unwrap();
-            if p.received_packet.is_some() {
+            if p.received_generation.is_some() {
                 break;
             }
         }
@@ -76,22 +80,19 @@ fn test_presenter_receives_engine_snapshot() {
     // Check if presenter received the packet
     let p_lock = presenter.lock().unwrap();
     assert!(
-        p_lock.received_packet.is_some(),
+        p_lock.received_generation.is_some(),
         "Presenter should have received a packet"
     );
-    let packet = p_lock.received_packet.as_ref().unwrap();
-    assert_eq!(packet.generation, 1);
+    assert_eq!(p_lock.received_generation.unwrap(), 1);
 
     // Check if our inserted cell is there and marked correctly (Born or Stable)
-    let target_cell = packet.cells.iter().find(|(pos, _)| *pos == (0, 0));
+    let target_cell = p_lock.received_cells.iter().find(|(pos, _)| *pos == (0, 0));
     assert!(
         target_cell.is_some(),
         "Inserted cell at (0,0) should be present"
     );
     let (_, state) = target_cell.unwrap();
     // 0b10 is Born, 0b11 is Stable, 0b01 is Dying.
-    // Since we just inserted it and then stepped, it might be Dying or Stable depending on rules.
-    // In Life, 1 cell dies. So it should be Dying (0b01).
     assert!(
         *state == 0b10 || *state == 0b01 || *state == 0b11,
         "Cell state should be Born, Dying, or Stable (got {:02b})",
