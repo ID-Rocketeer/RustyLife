@@ -164,6 +164,11 @@ impl Cell {
         self.packed_neighbor_data.store(packed, Ordering::Release);
     }
 
+    /// Reset neighbor count and set an invalid mask to force lazy reset on next access.
+    pub fn reset_all_counts(&self) {
+        self.packed_neighbor_data.store(0, Ordering::Release);
+    }
+
     pub fn calculate_next_state(&self, current_mask: usize, next_mask: usize) -> CellState {
         let count = self.get_neighbor_count(current_mask);
 

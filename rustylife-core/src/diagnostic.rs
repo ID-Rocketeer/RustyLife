@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
 fn main() {
-    let rle = include_str!("patterns/breeder1.rle");
+    let rle = include_str!("patterns/breeder_1.rle");
     let mut x = 0;
     let mut y = 0;
     let mut num: i128 = 0;
     let mut coords = HashSet::new();
 
-    let data = rle.lines()
+    let data = rle
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('x'))
         .collect::<String>();

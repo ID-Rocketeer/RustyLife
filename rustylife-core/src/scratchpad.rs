@@ -73,17 +73,23 @@ impl Scratchpad {
         }
     }
 
-    /// Collects all candidates for a specific bucket across all threads.
+    /// Collects all candidates for a specific bucket across all threads into a provided buffer.
     /// This is the "Gather" step of the pipeline.
     /// SAFETY: Must be called when no other threads are writing to the scratchpad.
-    pub fn get_column(&self, bucket_idx: usize) -> Vec<Candidate> {
-        let mut column = Vec::new();
+    pub fn get_column_into(&self, bucket_idx: usize, out: &mut Vec<Candidate>) {
+        out.clear();
         for thread_idx in 0..self.thread_count {
             unsafe {
                 let vec_ptr = self.rows[thread_idx][bucket_idx].value.get();
-                column.append(&mut *vec_ptr);
+                out.append(&mut *vec_ptr);
             }
         }
+    }
+
+    /// Obsolete: use get_column_into to avoid allocations.
+    pub fn get_column(&self, bucket_idx: usize) -> Vec<Candidate> {
+        let mut column = Vec::new();
+        self.get_column_into(bucket_idx, &mut column);
         column
     }
 

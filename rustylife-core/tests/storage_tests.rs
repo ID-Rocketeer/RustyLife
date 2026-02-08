@@ -2,6 +2,88 @@ use rustylife_core::cell::{Cell, CellState};
 use rustylife_core::hash::hash_coordinates;
 use rustylife_core::space::SimulationSpace;
 use std::collections::HashSet;
+use std::io::Read;
+use tempfile::NamedTempFile;
+
+#[test]
+fn test_storage_binary_encoding_integrity() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+    space.seed_glider(0, 0); // 5 cells
+
+    let temp = NamedTempFile::new().unwrap();
+    let path = temp.path();
+
+    // Encode Gen 1, 5 cells, is_running=true, record_count=5
+    space.encode_to_file(path, 1, 5, true, 5).unwrap();
+
+    let mut file = std::fs::File::open(path).unwrap();
+    let mut header = [0u8; 25];
+    file.read_exact(&mut header).unwrap();
+
+    // Header check
+    let generation_count = u64::from_le_bytes(header[0..8].try_into().unwrap());
+    let count = u64::from_le_bytes(header[8..16].try_into().unwrap());
+    let running = header[16] == 1;
+    let records = u64::from_le_bytes(header[17..25].try_into().unwrap());
+
+    assert_eq!(generation_count, 1);
+    assert_eq!(count, 5);
+    assert!(running);
+    assert_eq!(records, 5);
+
+    // CRC Check (last 4 bytes)
+    let meta = std::fs::metadata(path).unwrap();
+    let mut all_bytes = vec![0u8; meta.len() as usize];
+    let mut file = std::fs::File::open(path).unwrap();
+    file.read_exact(&mut all_bytes).unwrap();
+
+    let content_len = all_bytes.len() - 4;
+    let expected_crc = u32::from_le_bytes(all_bytes[content_len..].try_into().unwrap());
+
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&all_bytes[..content_len]);
+    let actual_crc = hasher.finalize();
+
+    assert_eq!(actual_crc, expected_crc, "CRC32 mismatch in binary export");
+}
+
+#[test]
+fn test_storage_deep_clear_and_repair() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+    let guard = space.read();
+    let mask = guard.current_state_mask();
+
+    // 1. Fill it
+    for i in 0..1000 {
+        space
+            .storage()
+            .insert(Cell::new(i, 0, CellState::Alive, mask));
+    }
+
+    // 2. Corrupt one in each bucket
+    for i in 0..rustylife_core::BUCKET_COUNT {
+        space.storage().find_and_apply(i as i128, 0, |c| {
+            c.increment_neighbor_count(mask);
+        });
+    }
+
+    // 3. Repair all
+    space.repair();
+
+    // 4. Verify no neighbor counts remain
+    let mut cells = Vec::new();
+    space.storage().collect_all(mask, 0, 0, &mut cells);
+    for (coords, _) in cells {
+        space.storage().find_and_apply(coords.0, coords.1, |c| {
+            assert_eq!(c.get_neighbor_count(mask), 0);
+        });
+    }
+
+    // 5. Clear everything
+    drop(guard); // Deadlock prevention: must drop read guard before clear() resets masks
+    space.clear();
+    assert_eq!(space.collect_all_states().len(), 0);
+}
 
 #[test]
 fn test_storage_correctly_manages_hash_collisions() {
@@ -160,4 +242,130 @@ fn test_storage_correctly_filters_bounds_on_boundaries() {
         .storage()
         .collect_in_rect((10, 10), (20, 20), mask, 0, 0, &mut out);
     assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn test_storage_pattern_seeding_parity() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+
+    // Test native pattern seeds
+    space.seed_glider(0, 0);
+    assert_eq!(space.collect_all_states().len(), 5);
+    space.clear();
+
+    space.seed_blinker(0, 0);
+    assert_eq!(space.collect_all_states().len(), 3);
+    space.clear();
+
+    space.seed_r_pentomino(0, 0);
+    assert_eq!(space.collect_all_states().len(), 5);
+    space.clear();
+
+    space.seed_glider_gun(0, 0);
+    assert_eq!(space.collect_all_states().len(), 36);
+    space.clear();
+
+    space.seed_spaceship(0, 0);
+    assert_eq!(space.collect_all_states().len(), 9);
+    space.clear();
+
+    space.seed_block(0, 0);
+    assert_eq!(space.collect_all_states().len(), 4);
+    space.clear();
+
+    space.seed_beehive(0, 0);
+    assert_eq!(space.collect_all_states().len(), 6);
+}
+
+#[test]
+fn test_storage_cells_format_robustness() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+
+    let pattern = "! Comment line\n! Another one\n.O.\n..O\nOOO";
+    space.seed_from_cells(10, 10, pattern);
+
+    let cells = space.collect_all_states();
+    assert_eq!(
+        cells.len(),
+        5,
+        "Should ignore comments and find 5 living cells"
+    );
+
+    // Verify a specific coordinate
+    // .O. at (10, 10) means (11, 10) is alive
+    let found = space.storage().find_and_apply(11, 10, |_| true).unwrap();
+    assert!(found);
+}
+
+#[test]
+fn test_storage_rle_format_robustness() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+
+    // A glider: 3o$o$bo!
+    // Translated:
+    // Row 0: OOO
+    // Row 1: O
+    // Row 2: .O
+    let rle = "x = 3, y = 3, rule = B3/S23\n3o$o$bo!";
+    space.seed_from_rle(100, 100, rle);
+
+    let cells = space.collect_all_states();
+    assert_eq!(cells.len(), 5);
+
+    assert!(space.storage().find_and_apply(100, 100, |_| true).is_some());
+    assert!(space.storage().find_and_apply(101, 100, |_| true).is_some());
+    assert!(space.storage().find_and_apply(102, 100, |_| true).is_some());
+    assert!(space.storage().find_and_apply(100, 101, |_| true).is_some());
+    assert!(space.storage().find_and_apply(101, 102, |_| true).is_some());
+}
+
+#[test]
+fn test_storage_rle_complex_counts() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+
+    // 2o2b2o! -> OO..OO
+    let rle = "2o2b2o!";
+    space.seed_from_rle(0, 0, rle);
+
+    assert_eq!(space.collect_all_states().len(), 4);
+    assert!(space.storage().find_and_apply(0, 0, |_| true).is_some());
+    assert!(space.storage().find_and_apply(1, 0, |_| true).is_some());
+    assert!(space.storage().find_and_apply(2, 0, |_| true).is_none());
+    assert!(space.storage().find_and_apply(4, 0, |_| true).is_some());
+}
+#[test]
+fn test_storage_rle_noisy_format() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+
+    // Noisy glider: 3 O , $ 1 b 1 O ! (with spaces, commas, and uppercase)
+    let rle = "x = 3, y = 3, rule = B3/S23\n 3 O , $ 1 b 1 O ! ";
+    space.seed_from_rle(0, 0, rle);
+
+    // Row 0: 3 alive
+    // Row 1: 1 dead, 1 alive
+    let cells = space.collect_all_states();
+    assert_eq!(
+        cells.len(),
+        4,
+        "Should handle spaces, commas, and uppercase O"
+    );
+
+    // Row 0
+    assert!(space.storage().find_and_apply(0, 0, |_| true).is_some());
+    assert!(space.storage().find_and_apply(1, 0, |_| true).is_some());
+    assert!(space.storage().find_and_apply(2, 0, |_| true).is_some());
+    // Row 1 (b is dead, next o is at x=1)
+    assert!(space.storage().find_and_apply(1, 1, |_| true).is_some());
+}
+
+#[test]
+fn test_breeder_rle_integrity() {
+    let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
+    let rle_content = include_str!("../src/patterns/breeder1.rle");
+
+    space.seed_from_rle(0, 0, rle_content);
+    let cells = space.collect_all_states();
+
+    assert_eq!(cells.len(), 4060, "Breeder 1 legacy count should be 4060");
+    println!("Verified Breeder 1 RLE load: {} cells", cells.len());
 }

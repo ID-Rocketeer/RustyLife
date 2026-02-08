@@ -28,7 +28,10 @@ impl SparseStorage {
     pub fn insert(&self, cell: Cell) {
         let coords = cell.coordinates();
         let idx = hash_coordinates(coords.0, coords.1, self.buckets.len());
-        self.buckets[idx].write().unwrap().insert(cell);
+        self.buckets[idx]
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(cell);
     }
 
     pub fn find_and_apply<F, R>(&self, x: i128, y: i128, f: F) -> Option<R>
@@ -36,7 +39,10 @@ impl SparseStorage {
         F: FnOnce(&Cell) -> R,
     {
         let idx = hash_coordinates(x, y, self.buckets.len());
-        self.buckets[idx].read().unwrap().find_and_apply((x, y), f)
+        self.buckets[idx]
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .find_and_apply((x, y), f)
     }
 
     pub fn find_or_create_and_apply<F, C, R>(&self, x: i128, y: i128, creator: C, f: F) -> R
@@ -47,7 +53,7 @@ impl SparseStorage {
         let idx = hash_coordinates(x, y, self.buckets.len());
         self.buckets[idx]
             .write()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .find_or_create_and_apply((x, y), creator, f)
     }
 
@@ -61,7 +67,7 @@ impl SparseStorage {
         for bucket in &self.buckets {
             bucket
                 .read()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .collect_all(current_mask, last_mask, last_last_mask, out);
         }
     }
@@ -76,20 +82,16 @@ impl SparseStorage {
         out: &mut Vec<((i128, i128), u8)>,
     ) {
         for bucket in &self.buckets {
-            bucket.read().unwrap().collect_in_rect(
-                min,
-                max,
-                current_mask,
-                last_mask,
-                last_last_mask,
-                out,
-            );
+            bucket
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .collect_in_rect(min, max, current_mask, last_mask, last_last_mask, out);
         }
     }
 
     pub fn clear(&self) {
         for bucket in self.buckets.iter() {
-            bucket.write().unwrap().clear();
+            bucket.write().unwrap_or_else(|e| e.into_inner()).clear();
         }
     }
 
@@ -102,13 +104,16 @@ impl SparseStorage {
         hasher: &mut crc32fast::Hasher,
     ) -> std::io::Result<()> {
         for bucket in &self.buckets {
-            bucket.read().unwrap().write_cells_streaming(
-                current_mask,
-                last_mask,
-                last_last_mask,
-                buffered_writer,
-                hasher,
-            )?;
+            bucket
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .write_cells_streaming(
+                    current_mask,
+                    last_mask,
+                    last_last_mask,
+                    buffered_writer,
+                    hasher,
+                )?;
         }
         Ok(())
     }
@@ -178,10 +183,11 @@ impl SimulationSpace {
     /// Repairs a tainted simulation state by resetting neighbor counts.
     /// Used when recovering from an aggressive stop.
     pub fn repair(&self) {
-        let guard = self.mask.read();
-        let current_mask = guard.current_state_mask();
         for bucket in self.storage().buckets.iter() {
-            bucket.read().unwrap().reset_counts(current_mask);
+            bucket
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .reset_all_counts();
         }
     }
 
@@ -381,20 +387,42 @@ impl SimulationSpace {
         let mask = guard.current_state_mask();
         let mut x = 0;
         let mut y = 0;
+        let mut start_x = 0;
         let mut num = 0;
 
         for line in rle.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with('x') {
+            if line.is_empty() {
                 continue;
             }
+
+            // Handle position lines: #P x y OR #R x y
+            if line.starts_with("#P") || line.starts_with("#R") {
+                let parts: Vec<&str> = line[2..].split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let (Ok(nx), Ok(ny)) = (parts[0].parse::<i128>(), parts[1].parse::<i128>()) {
+                        x = nx;
+                        y = ny;
+                        start_x = nx;
+                    }
+                }
+                continue;
+            }
+
+            if line.starts_with('#') || line.to_ascii_lowercase().starts_with("x =") {
+                continue;
+            }
+
             for ch in line.chars() {
                 if ch.is_digit(10) {
                     num = num * 10 + ch.to_digit(10).unwrap() as i128;
+                } else if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ',' {
+                    // Skip whitespace and separators, do NOT reset num
+                    continue;
                 } else {
                     let count = if num == 0 { 1 } else { num };
                     num = 0;
-                    match ch {
+                    match ch.to_ascii_lowercase() {
                         'b' => x += count,
                         'o' => {
                             for i in 0..count {
@@ -409,20 +437,14 @@ impl SimulationSpace {
                         }
                         '$' => {
                             y += count;
-                            x = 0;
+                            x = start_x;
                         }
                         '!' => return,
-                        _ => {}
+                        _ => {} // Ignore unknown characters but consume num
                     }
                 }
             }
         }
-    }
-
-    /// Seeds a breeder 1 pattern.
-    pub fn seed_breeder_1(&self, ox: i128, oy: i128) {
-        let cells = include_str!("patterns/breeder1.cells");
-        self.seed_from_cells(ox, oy, cells);
     }
 
     pub fn encode_to_file(
@@ -562,7 +584,8 @@ mod tests {
     #[test]
     fn test_breeder_cell_count() {
         let space = SimulationSpace::new(crate::BUCKET_COUNT);
-        space.seed_breeder_1(0, 0);
+        let rle = include_str!("patterns/breeder1.rle");
+        space.seed_from_rle(0, 0, rle);
         let mut cells = Vec::new();
         let guard = space.mask.read();
         space.storage().collect_all(
@@ -606,10 +629,31 @@ mod tests {
         // Run repair
         space.repair();
 
-        // Verify fix
+        // Verify fix - Any mask should now return 0
         space.storage().find_and_apply(0, 0, |c| {
             count = c.get_neighbor_count(current);
         });
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_rle_position_offset() {
+        let space = SimulationSpace::new(crate::BUCKET_COUNT);
+        // Test strict #R format (space separated)
+        let rle = "#R 5 5\no!";
+        space.seed_from_rle(0, 0, rle);
+
+        let guard = space.mask.read();
+        let _current = guard.current_state_mask();
+
+        let mut found = false;
+        space.storage().find_and_apply(5, 5, |_| found = true);
+        assert!(found, "Cell should be at 5,5 due to offset");
+
+        let mut found_origin = false;
+        space
+            .storage()
+            .find_and_apply(0, 0, |_| found_origin = true);
+        assert!(!found_origin, "Cell should NOT be at 0,0");
     }
 }

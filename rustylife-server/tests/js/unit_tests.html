@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>RustyLife JS Unit Tests</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #eee;
+            padding: 20px;
+        }
+
+        .pass {
+            color: #4ade80;
+        }
+
+        .fail {
+            color: #f87171;
+            font-weight: bold;
+        }
+
+        .summary {
+            margin-top: 20px;
+            border-top: 1px solid #444;
+            padding-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>RustyLife JS Unit Tests</h1>
+    <div id="results"></div>
+    <div id="summary" class="summary"></div>
+
+    <script type="module">
+        import { fmtNum, formatSI } from '../../rustylife-server/static/utils.js';
+        import { setI128, encodeRequest } from '../../rustylife-server/static/protocol.js';
+
+        const resultsEl = document.getElementById('results');
+        const summaryEl = document.getElementById('summary');
+        let passed = 0;
+        let failed = 0;
+
+        function assert(condition, message) {
+            const div = document.createElement('div');
+            if (condition) {
+                div.className = 'pass';
+                div.innerText = 'PASS: ' + message;
+                passed++;
+            } else {
+                div.className = 'fail';
+                div.innerText = 'FAIL: ' + message;
+                failed++;
+            }
+            resultsEl.appendChild(div);
+        }
+
+        function assertEqual(actual, expected, message) {
+            assert(actual === expected, `${message} (Expected: ${expected}, Got: ${actual})`);
+        }
+
+        // --- Utils Tests ---
+        console.group('Utils Tests');
+        assertEqual(fmtNum(123, 5, false), "00123", "fmtNum padding");
+        assertEqual(fmtNum(-42, 3, true), "-042", "fmtNum negative with sign");
+        assertEqual(fmtNum(42, 3, true), "+042", "fmtNum positive with sign");
+
+        assertEqual(formatSI(1234, 3, false), "[ 001.23 K/S ]", "formatSI Kilo");
+        assertEqual(formatSI(1234567, 3, false), "[ 001.23 M/S ]", "formatSI Mega");
+        assertEqual(formatSI(-500, 3, true), "[ -500.00 /S ]", "formatSI negative signed");
+        console.groupEnd();
+
+        // --- Protocol Tests ---
+        console.group('Protocol Tests');
+        const buffer = new ArrayBuffer(16);
+        const view = new DataView(buffer);
+
+        setI128(view, 0, 123456789n);
+        assertEqual(view.getBigInt64(0, true), 123456789n, "setI128 positive low bits");
+        assertEqual(view.getBigInt64(8, true), 0n, "setI128 positive high bits (zero)");
+
+        setI128(view, 0, -1n);
+        assertEqual(view.getBigInt64(0, true), -1n, "setI128 -1 low bits");
+        assertEqual(view.getBigInt64(8, true), -1n, "setI128 -1 high bits (sign extension)");
+
+        const req1 = encodeRequest(0x01);
+        assertEqual(req1.length, 1, "encodeRequest no payload length");
+        assertEqual(req1[0], 0x01, "encodeRequest tag");
+
+        const payload = new Uint8Array([10, 20, 30]);
+        const req2 = encodeRequest(0x06, payload);
+        assertEqual(req2.length, 4, "encodeRequest with payload length");
+        assertEqual(req2[0], 0x06, "encodeRequest with payload tag");
+        assertEqual(req2[1], 10, "encodeRequest payload data");
+        console.groupEnd();
+
+        summaryEl.innerText = `TOTAL: ${passed + failed} | PASSED: ${passed} | FAILED: ${failed}`;
+        if (failed === 0) {
+            summaryEl.classList.add('pass');
+            document.title = "TESTS PASSED";
+        } else {
+            summaryEl.classList.add('fail');
+            document.title = "TESTS FAILED";
+        }
+    </script>
+</body>
+
+</html>
