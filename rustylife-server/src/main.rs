@@ -257,7 +257,7 @@ fn main() {
         // IPC/TCP Server for Native Clients
         let ipc_state = shared_state_clone.clone();
         tokio::spawn(async move {
-            let listener = TcpListener::bind(format!("127.0.0.1:{}", ipc_port))
+            let listener = TcpListener::bind(format!("0.0.0.0:{}", ipc_port))
                 .await
                 .unwrap();
             println!("IPC (TCP) Server listening on port {}", ipc_port);
