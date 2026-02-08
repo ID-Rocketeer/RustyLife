@@ -387,16 +387,32 @@ impl SimulationSpace {
         let mask = guard.current_state_mask();
         let mut x = 0;
         let mut y = 0;
+        let mut start_x = 0;
         let mut num = 0;
 
         for line in rle.lines() {
             let line = line.trim();
-            if line.is_empty()
-                || line.starts_with('#')
-                || line.to_ascii_lowercase().starts_with("x =")
-            {
+            if line.is_empty() {
                 continue;
             }
+
+            // Handle position lines: #P x y OR #R x y
+            if line.starts_with("#P") || line.starts_with("#R") {
+                let parts: Vec<&str> = line[2..].split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let (Ok(nx), Ok(ny)) = (parts[0].parse::<i128>(), parts[1].parse::<i128>()) {
+                        x = nx;
+                        y = ny;
+                        start_x = nx;
+                    }
+                }
+                continue;
+            }
+
+            if line.starts_with('#') || line.to_ascii_lowercase().starts_with("x =") {
+                continue;
+            }
+
             for ch in line.chars() {
                 if ch.is_digit(10) {
                     num = num * 10 + ch.to_digit(10).unwrap() as i128;
@@ -421,7 +437,7 @@ impl SimulationSpace {
                         }
                         '$' => {
                             y += count;
-                            x = 0;
+                            x = start_x;
                         }
                         '!' => return,
                         _ => {} // Ignore unknown characters but consume num
@@ -618,5 +634,26 @@ mod tests {
             count = c.get_neighbor_count(current);
         });
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_rle_position_offset() {
+        let space = SimulationSpace::new(crate::BUCKET_COUNT);
+        // Test strict #R format (space separated)
+        let rle = "#R 5 5\no!";
+        space.seed_from_rle(0, 0, rle);
+
+        let guard = space.mask.read();
+        let _current = guard.current_state_mask();
+
+        let mut found = false;
+        space.storage().find_and_apply(5, 5, |_| found = true);
+        assert!(found, "Cell should be at 5,5 due to offset");
+
+        let mut found_origin = false;
+        space
+            .storage()
+            .find_and_apply(0, 0, |_| found_origin = true);
+        assert!(!found_origin, "Cell should NOT be at 0,0");
     }
 }

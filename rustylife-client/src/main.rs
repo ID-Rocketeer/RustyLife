@@ -11,6 +11,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct ClientArgs {
+    /// Server IP address to connect to
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Server port to connect to
+    #[arg(short, long, default_value_t = 9001)]
+    port: u16,
+}
+
 struct ClientActionHandler {
     tx: mpsc::Sender<Request>,
 }
@@ -47,6 +61,7 @@ impl UserActionHandler for ClientActionHandler {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = ClientArgs::parse();
     let client_state = Arc::new(Mutex::new(AppState::default()));
 
     // Ctrl-C Handler for clean shutdown
@@ -60,12 +75,15 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<Request>(10);
 
     let state_clone = client_state.clone();
+    let host = args.host.clone();
+    let port = args.port;
 
     // Background task for TCP communication
     tokio::spawn(async move {
+        let addr = format!("{}:{}", host, port);
         loop {
-            println!("Connecting to server...");
-            if let Ok(stream) = TcpStream::connect("127.0.0.1:9001").await {
+            println!("Connecting to server at {}...", addr);
+            if let Ok(stream) = TcpStream::connect(&addr).await {
                 println!("Connected!");
                 {
                     let mut s = state_clone.lock().unwrap();
