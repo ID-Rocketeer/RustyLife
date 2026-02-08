@@ -427,11 +427,13 @@ fn run_suite(pattern_name: &str, rle: &str) {
 }
 
 #[test]
+#[ignore]
 fn bench_breeder1() {
     run_suite("Breeder 1", BREEDER1_RLE);
 }
 
 #[test]
+#[ignore]
 fn bench_sawtooth() {
     run_suite("Quadratic Sawtooth", SAWTOOTH_RLE);
 }

@@ -25,9 +25,15 @@ fn test_repro_client_deadlock() {
     });
     engine.add_subscriber(client.clone());
 
-    // 1. Run
-    engine.seed("r-pentomino".to_string());
-    engine.start();
+    // 0. Register Pattern
+    engine.register_pattern(rustylife_core::patterns::Pattern {
+        name: "r-pentomino".to_string(),
+        description: "Test pattern".to_string(),
+        source: rustylife_core::patterns::PatternSource::Rle("x = 3, y = 3\n2o$2o$2o!".to_string()),
+    });
+
+    // 1. Run (Atomic)
+    engine.seed_and_start("r-pentomino".to_string(), None);
 
     // Wait for running
     let start = std::time::Instant::now();

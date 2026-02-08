@@ -10,6 +10,14 @@ fn test_repro_run_stop_step_kills_cells() {
     let engine = SimulationEngine::new(space.clone(), 2);
 
     // 1. Seed
+    {
+        let mut patterns = engine.patterns.write().unwrap();
+        patterns.push(rustylife_core::patterns::Pattern {
+            name: "r-pentomino".to_string(),
+            description: "R-pentomino test".to_string(),
+            source: rustylife_core::patterns::PatternSource::Rle("b2o$2ob$bo!".to_string()),
+        });
+    }
     engine.seed("r-pentomino".to_string());
 
     // Wait for seed to settle

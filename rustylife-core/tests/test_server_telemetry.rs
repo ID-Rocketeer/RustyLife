@@ -37,6 +37,13 @@ fn test_telemetry_work_and_net() {
     });
     engine.add_subscriber(subscriber.clone());
 
+    // Register Blinker
+    engine.register_pattern(rustylife_core::patterns::Pattern {
+        name: "blinker".to_string(),
+        description: "Blinker p2".to_string(),
+        source: rustylife_core::patterns::PatternSource::Rle("x = 3, y = 3\n3o!".to_string()),
+    });
+
     // 3. Scenario: Blinker
     // Gen 0: Horizontal (3 cells)
     // Gen 1: Vertical (3 cells)

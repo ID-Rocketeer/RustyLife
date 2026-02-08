@@ -1,6 +1,7 @@
 use crate::cell::{Cell, CellState};
-use crate::scratchpad::Scratchpad;
+use crate::scratchpad::{CachePadded, Candidate, Scratchpad};
 use crate::space::SimulationSpace;
+use std::cell::UnsafeCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -30,6 +31,8 @@ pub enum Tasks {
     Reset,
     /// Seed the simulation with a named pattern.
     Seed(String),
+    /// Seed the simulation with a named pattern and immediately start.
+    SeedAndStart(String, Option<u64>),
 }
 
 /// Tasks dedicated to the background I/O thread.
@@ -39,6 +42,29 @@ pub struct SnapshotRecord {
     pub y: i128,
     pub state: u8,
 }
+
+/// Thread-local buffer for commit operations.
+/// Owned exclusively by the worker thread with the corresponding index.
+pub struct CommitBuffer {
+    pub incoming: Vec<Candidate>,
+    pub coords: Vec<(i128, i128)>,
+}
+
+impl Default for CommitBuffer {
+    fn default() -> Self {
+        Self {
+            incoming: Vec::with_capacity(1024),
+            coords: Vec::with_capacity(1024),
+        }
+    }
+}
+
+pub struct PaddedBuffer {
+    pub inner: CachePadded<UnsafeCell<CommitBuffer>>,
+}
+
+// SAFETY: access is guarded by thread_idx in worker loop
+unsafe impl Sync for PaddedBuffer {}
 
 pub enum IoTask {
     /// Generate a binary snapshot and notifies subscribers.
@@ -73,7 +99,11 @@ impl Tasks {
             | Tasks::Step
             | Tasks::SpreadBatch(_, _)
             | Tasks::CommitBatch(_, _) => true,
-            Tasks::Stop | Tasks::Quit | Tasks::Reset | Tasks::Seed(_) => false,
+            Tasks::Stop
+            | Tasks::Quit
+            | Tasks::Reset
+            | Tasks::Seed(_)
+            | Tasks::SeedAndStart(_, _) => false,
         }
     }
 }
@@ -331,6 +361,8 @@ pub struct SimulationEngine {
     epoch: AtomicU64,
     /// Dynamic registry of available patterns.
     pub patterns: RwLock<Vec<crate::patterns::Pattern>>,
+    /// Thread-local scratch buffers for commit operations.
+    pub commit_buffers: Vec<PaddedBuffer>,
 }
 
 impl SimulationEngine {
@@ -372,6 +404,11 @@ impl SimulationEngine {
             target_generation: AtomicU64::new(u64::MAX),
             epoch: AtomicU64::new(0),
             patterns: RwLock::new(crate::patterns::get_builtin_patterns()),
+            commit_buffers: (0..pool_size)
+                .map(|_| PaddedBuffer {
+                    inner: CachePadded::new(UnsafeCell::new(CommitBuffer::default())),
+                })
+                .collect(),
         });
 
         // Setup Background I/O thread
@@ -389,178 +426,247 @@ impl SimulationEngine {
         let mut handles = engine._worker_handles.lock().unwrap();
         for thread_idx in 0..pool_size {
             let engine_arc = Arc::clone(&engine);
-            handles.push(thread::spawn(move || {
-                loop {
-                    let task = engine_arc.work_queue.dequeue_or_idle();
+            handles.push(
+                thread::Builder::new()
+                    .name(format!("Worker-{}", thread_idx))
+                    .spawn(move || {
+                        loop {
+                            let task = engine_arc.work_queue.dequeue_or_idle();
 
-                    // NOTE: This catch_unwind is a safety barrier to prevent a single bucket
-                    // corruption from deadlocking the entire thread pool. It is normal
-                    // for it to appear in the profile trace wrapping actual execution.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // eprintln!("Thread {} processing {:?}", thread_idx, task);
-                        match &task {
-                            Tasks::Quit => {
-                                engine_arc.work_queue.finish_work();
-                                return true; // Signal to break loop
-                            }
-                            Tasks::Stop => {
-                                let _lock = engine_arc.transition_lock.lock().unwrap();
-                                engine_arc.stopping.store(true, Ordering::SeqCst);
-                                engine_arc.tainted.store(true, Ordering::SeqCst);
-                                engine_arc.work_queue.purge();
-                                if engine_arc.work_queue.in_flight_count() > 1 {
-                                    engine_arc.work_queue.enqueue(Tasks::Stop);
-                                }
-                            }
-                            Tasks::Start => {
-                                // engine.stopping.store(false, Ordering::SeqCst); // REMOVED: Managed by public API
-                                if engine_arc.stopping.load(Ordering::SeqCst) {
-                                    // If we were stopped while this task was in queue, abort.
-                                    engine_arc.work_queue.finish_work();
-                                    return true;
-                                }
-                                if engine_arc.work_queue.in_flight_count() == 1 {
-                                    // Eager Advance: Prepare destination generation before work starts
-                                    engine_arc.space.advance_generation();
-                                    engine_arc.generation.fetch_add(1, Ordering::SeqCst);
+                            // NOTE: This catch_unwind is a safety barrier to prevent a single bucket
+                            // corruption from deadlocking the entire thread pool. It is normal
+                            // for it to appear in the profile trace wrapping actual execution.
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    // eprintln!("Thread {} processing {:?}", thread_idx, task);
+                                    match &task {
+                                        Tasks::Quit => {
+                                            engine_arc.work_queue.finish_work();
+                                            return true; // Signal to break loop
+                                        }
+                                        Tasks::Stop => {
+                                            let _lock = engine_arc.transition_lock.lock().unwrap();
+                                            engine_arc.stopping.store(true, Ordering::SeqCst);
+                                            engine_arc.tainted.store(true, Ordering::SeqCst);
+                                            engine_arc.work_queue.purge();
+                                            if engine_arc.work_queue.in_flight_count() > 1 {
+                                                engine_arc.work_queue.enqueue(Tasks::Stop);
+                                            }
+                                        }
+                                        Tasks::Start => {
+                                            // engine.stopping.store(false, Ordering::SeqCst); // REMOVED: Managed by public API
+                                            if engine_arc.stopping.load(Ordering::SeqCst) {
+                                                // If we were stopped while this task was in queue, abort.
+                                                engine_arc.work_queue.finish_work();
+                                                return true;
+                                            }
+                                            if engine_arc.work_queue.in_flight_count() == 1 {
+                                                // Eager Advance: Prepare destination generation before work starts
+                                                engine_arc.space.advance_generation();
+                                                engine_arc
+                                                    .generation
+                                                    .fetch_add(1, Ordering::SeqCst);
 
-                                    // Do NOT reset target_generation here, as this task is recycled for the internal loop.
-                                    // Public start() sets it to MAX. StartGenerations() sets it to specific target.
+                                                // Do NOT reset target_generation here, as this task is recycled for the internal loop.
+                                                // Public start() sets it to MAX. StartGenerations() sets it to specific target.
 
-                                    if engine_arc.tainted.load(Ordering::SeqCst) {
-                                        engine_arc.scratchpad.clear();
-                                        engine_arc.space.repair();
-                                        engine_arc.tainted.store(false, Ordering::SeqCst);
+                                                if engine_arc.tainted.load(Ordering::SeqCst) {
+                                                    engine_arc.scratchpad.clear();
+                                                    engine_arc.space.repair();
+                                                    engine_arc
+                                                        .tainted
+                                                        .store(false, Ordering::SeqCst);
+                                                }
+                                                Self::initiate_spread(&engine_arc);
+                                            } else {
+                                                engine_arc.work_queue.enqueue(Tasks::Start);
+                                            }
+                                        }
+                                        Tasks::StartGenerations(count) => {
+                                            let current =
+                                                engine_arc.generation.load(Ordering::SeqCst) as u64;
+                                            engine_arc
+                                                .target_generation
+                                                .store(current + count, Ordering::SeqCst);
+                                            // engine_arc.stopping.store(false, Ordering::SeqCst); // REMOVED: Managed by public API
+
+                                            if engine_arc.stopping.load(Ordering::SeqCst) {
+                                                // If we were stopped while this task was in queue, abort.
+                                                engine_arc.work_queue.finish_work();
+                                                return true;
+                                            }
+
+                                            if engine_arc.work_queue.in_flight_count() == 1 {
+                                                // Eager Advance
+                                                engine_arc.space.advance_generation();
+                                                engine_arc
+                                                    .generation
+                                                    .fetch_add(1, Ordering::SeqCst);
+
+                                                if engine_arc.tainted.load(Ordering::SeqCst) {
+                                                    engine_arc.scratchpad.clear();
+                                                    engine_arc.space.repair();
+                                                    engine_arc
+                                                        .tainted
+                                                        .store(false, Ordering::SeqCst);
+                                                }
+                                                Self::initiate_spread(&engine_arc);
+                                            } else {
+                                                engine_arc
+                                                    .work_queue
+                                                    .enqueue(Tasks::StartGenerations(*count));
+                                            }
+                                        }
+                                        Tasks::Step => {
+                                            let _lock = engine_arc.transition_lock.lock().unwrap();
+                                            if engine_arc.work_queue.in_flight_count() == 1 {
+                                                // Eager Advance
+                                                engine_arc.space.advance_generation();
+                                                engine_arc
+                                                    .generation
+                                                    .fetch_add(1, Ordering::SeqCst);
+
+                                                if engine_arc.tainted.load(Ordering::SeqCst) {
+                                                    engine_arc.scratchpad.clear();
+                                                    engine_arc.space.repair();
+                                                    engine_arc
+                                                        .tainted
+                                                        .store(false, Ordering::SeqCst);
+                                                }
+                                                engine_arc.stopping.store(true, Ordering::SeqCst);
+                                                Self::initiate_spread(&engine_arc);
+                                            }
+                                        }
+                                        Tasks::SpreadBatch(start, end) => {
+                                            Self::spread_bucket(
+                                                *start,
+                                                *end,
+                                                &engine_arc,
+                                                thread_idx,
+                                            );
+                                        }
+                                        Tasks::CommitBatch(start, end) => {
+                                            Self::commit_bucket(
+                                                *start,
+                                                *end,
+                                                &engine_arc,
+                                                thread_idx,
+                                            );
+                                        }
+                                        Tasks::Reset => {
+                                            let _lock = engine_arc.transition_lock.lock().unwrap();
+                                            // Race Condition Fix: Reset must ensure exclusivity.
+                                            engine_arc.stopping.store(true, Ordering::SeqCst);
+                                            engine_arc.work_queue.purge();
+
+                                            if engine_arc.work_queue.in_flight_count() > 1 {
+                                                engine_arc.work_queue.enqueue(Tasks::Reset);
+                                            } else {
+                                                let new_epoch =
+                                                    engine_arc.epoch.fetch_add(1, Ordering::SeqCst)
+                                                        + 1;
+                                                engine_arc.snapshots.clear(new_epoch);
+                                                engine_arc.space.clear();
+                                                engine_arc.generation.store(0, Ordering::SeqCst);
+                                                engine_arc.living_count.store(0, Ordering::SeqCst);
+                                                let seed =
+                                                    engine_arc.last_seed.lock().unwrap().clone();
+                                                if let Some(pattern) = seed {
+                                                    Self::apply_seed(&engine_arc, &pattern);
+                                                }
+                                                Self::trigger_initial_snapshot(&engine_arc);
+                                            }
+                                        }
+                                        Tasks::Seed(pattern) => {
+                                            let _lock = engine_arc.transition_lock.lock().unwrap();
+                                            // Race Condition Fix: Reset must ensure exclusivity.
+                                            // 1. Signal Stop to prevent new work generation.
+                                            engine_arc.stopping.store(true, Ordering::SeqCst);
+                                            // 2. Purge existing work (Step, Spread, Commit).
+                                            engine_arc.work_queue.purge();
+
+                                            // 3. Wait for workers to drain.
+                                            // If other tasks are still in flight (e.g. finishing a Spread),
+                                            // re-enqueue Seed to try again later.
+                                            if engine_arc.work_queue.in_flight_count() > 1 {
+                                                engine_arc
+                                                    .work_queue
+                                                    .enqueue(Tasks::Seed(pattern.clone()));
+                                            } else {
+                                                // Quiescent State: We are the only active task.
+                                                let new_epoch =
+                                                    engine_arc.epoch.fetch_add(1, Ordering::SeqCst)
+                                                        + 1;
+                                                engine_arc.snapshots.clear(new_epoch);
+                                                engine_arc.space.clear();
+                                                engine_arc.generation.store(0, Ordering::SeqCst);
+                                                *engine_arc.last_seed.lock().unwrap() =
+                                                    Some(pattern.clone());
+                                                Self::apply_seed(&engine_arc, &pattern);
+                                                Self::trigger_initial_snapshot(&engine_arc);
+                                            }
+                                        }
+                                        Tasks::SeedAndStart(pattern, target_gen) => {
+                                            let _lock = engine_arc.transition_lock.lock().unwrap();
+                                            engine_arc.stopping.store(true, Ordering::SeqCst);
+                                            engine_arc.work_queue.purge();
+
+                                            if engine_arc.work_queue.in_flight_count() > 1 {
+                                                engine_arc.work_queue.enqueue(Tasks::SeedAndStart(
+                                                    pattern.clone(),
+                                                    *target_gen,
+                                                ));
+                                            } else {
+                                                let new_epoch =
+                                                    engine_arc.epoch.fetch_add(1, Ordering::SeqCst)
+                                                        + 1;
+                                                engine_arc.snapshots.clear(new_epoch);
+                                                engine_arc.space.clear();
+                                                engine_arc.generation.store(0, Ordering::SeqCst);
+                                                engine_arc.living_count.store(0, Ordering::SeqCst);
+                                                *engine_arc.last_seed.lock().unwrap() =
+                                                    Some(pattern.clone());
+                                                Self::apply_seed(&engine_arc, &pattern);
+                                                Self::trigger_initial_snapshot(&engine_arc);
+
+                                                // Set target generation if provided
+                                                let target = target_gen.unwrap_or(u64::MAX);
+                                                engine_arc
+                                                    .target_generation
+                                                    .store(target, Ordering::SeqCst);
+
+                                                // Auto-start immediately
+                                                engine_arc.stopping.store(false, Ordering::SeqCst);
+                                                engine_arc.work_queue.enqueue(Tasks::Start);
+                                            }
+                                        }
+                                    };
+                                    false // Do not break
+                                }));
+
+                            match result {
+                                Ok(should_break) => {
+                                    if should_break {
+                                        break;
                                     }
-                                    Self::initiate_spread(&engine_arc);
-                                } else {
-                                    engine_arc.work_queue.enqueue(Tasks::Start);
-                                }
-                            }
-                            Tasks::StartGenerations(count) => {
-                                let current = engine_arc.generation.load(Ordering::SeqCst) as u64;
-                                engine_arc
-                                    .target_generation
-                                    .store(current + count, Ordering::SeqCst);
-                                // engine_arc.stopping.store(false, Ordering::SeqCst); // REMOVED: Managed by public API
-
-                                if engine_arc.stopping.load(Ordering::SeqCst) {
-                                    // If we were stopped while this task was in queue, abort.
-                                    engine_arc.work_queue.finish_work();
-                                    return true;
-                                }
-
-                                if engine_arc.work_queue.in_flight_count() == 1 {
-                                    // Eager Advance
-                                    engine_arc.space.advance_generation();
-                                    engine_arc.generation.fetch_add(1, Ordering::SeqCst);
-
-                                    if engine_arc.tainted.load(Ordering::SeqCst) {
-                                        engine_arc.scratchpad.clear();
-                                        engine_arc.space.repair();
-                                        engine_arc.tainted.store(false, Ordering::SeqCst);
+                                    let remaining = engine_arc.work_queue.finish_work();
+                                    if remaining == 0 {
+                                        Self::handle_emergent_transition(&engine_arc, &task);
                                     }
-                                    Self::initiate_spread(&engine_arc);
-                                } else {
-                                    engine_arc
-                                        .work_queue
-                                        .enqueue(Tasks::StartGenerations(*count));
                                 }
-                            }
-                            Tasks::Step => {
-                                let _lock = engine_arc.transition_lock.lock().unwrap();
-                                if engine_arc.work_queue.in_flight_count() == 1 {
-                                    // Eager Advance
-                                    engine_arc.space.advance_generation();
-                                    engine_arc.generation.fetch_add(1, Ordering::SeqCst);
-
-                                    if engine_arc.tainted.load(Ordering::SeqCst) {
-                                        engine_arc.scratchpad.clear();
-                                        engine_arc.space.repair();
-                                        engine_arc.tainted.store(false, Ordering::SeqCst);
+                                Err(e) => {
+                                    eprintln!("CRITICAL: Worker Panic caught: {:?}", e);
+                                    // Ensure we decrement count to avoid deadlock, though state is likely compromised
+                                    let remaining = engine_arc.work_queue.finish_work();
+                                    if remaining == 0 {
+                                        Self::handle_emergent_transition(&engine_arc, &task);
                                     }
-                                    engine_arc.stopping.store(true, Ordering::SeqCst);
-                                    Self::initiate_spread(&engine_arc);
                                 }
-                            }
-                            Tasks::SpreadBatch(start, end) => {
-                                Self::spread_bucket(*start, *end, &engine_arc, thread_idx);
-                            }
-                            Tasks::CommitBatch(start, end) => {
-                                Self::commit_bucket(*start, *end, &engine_arc);
-                            }
-                            Tasks::Reset => {
-                                let _lock = engine_arc.transition_lock.lock().unwrap();
-                                // Race Condition Fix: Reset must ensure exclusivity.
-                                engine_arc.stopping.store(true, Ordering::SeqCst);
-                                engine_arc.work_queue.purge();
-
-                                if engine_arc.work_queue.in_flight_count() > 1 {
-                                    engine_arc.work_queue.enqueue(Tasks::Reset);
-                                } else {
-                                    let new_epoch =
-                                        engine_arc.epoch.fetch_add(1, Ordering::SeqCst) + 1;
-                                    engine_arc.snapshots.clear(new_epoch);
-                                    engine_arc.space.clear();
-                                    engine_arc.generation.store(0, Ordering::SeqCst);
-                                    engine_arc.living_count.store(0, Ordering::SeqCst);
-                                    let seed = engine_arc.last_seed.lock().unwrap().clone();
-                                    if let Some(pattern) = seed {
-                                        Self::apply_seed(&engine_arc, &pattern);
-                                    }
-                                    Self::trigger_initial_snapshot(&engine_arc);
-                                }
-                            }
-                            Tasks::Seed(pattern) => {
-                                let _lock = engine_arc.transition_lock.lock().unwrap();
-                                // Race Condition Fix: Reset must ensure exclusivity.
-                                // 1. Signal Stop to prevent new work generation.
-                                engine_arc.stopping.store(true, Ordering::SeqCst);
-                                // 2. Purge existing work (Step, Spread, Commit).
-                                engine_arc.work_queue.purge();
-
-                                // 3. Wait for workers to drain.
-                                // If other tasks are still in flight (e.g. finishing a Spread),
-                                // re-enqueue Seed to try again later.
-                                if engine_arc.work_queue.in_flight_count() > 1 {
-                                    engine_arc.work_queue.enqueue(Tasks::Seed(pattern.clone()));
-                                } else {
-                                    // Quiescent State: We are the only active task.
-                                    let new_epoch =
-                                        engine_arc.epoch.fetch_add(1, Ordering::SeqCst) + 1;
-                                    engine_arc.snapshots.clear(new_epoch);
-                                    engine_arc.space.clear();
-                                    engine_arc.generation.store(0, Ordering::SeqCst);
-                                    *engine_arc.last_seed.lock().unwrap() = Some(pattern.clone());
-                                    Self::apply_seed(&engine_arc, &pattern);
-                                    Self::trigger_initial_snapshot(&engine_arc);
-                                }
-                            }
-                        };
-                        false // Do not break
-                    }));
-
-                    match result {
-                        Ok(should_break) => {
-                            if should_break {
-                                break;
-                            }
-                            let remaining = engine_arc.work_queue.finish_work();
-                            if remaining == 0 {
-                                Self::handle_emergent_transition(&engine_arc, &task);
                             }
                         }
-                        Err(e) => {
-                            eprintln!("CRITICAL: Worker Panic caught: {:?}", e);
-                            // Ensure we decrement count to avoid deadlock, though state is likely compromised
-                            let remaining = engine_arc.work_queue.finish_work();
-                            if remaining == 0 {
-                                Self::handle_emergent_transition(&engine_arc, &task);
-                            }
-                        }
-                    }
-                }
-            }));
+                    })
+                    .expect("Failed to spawn worker thread"),
+            );
         }
         drop(handles);
         engine
@@ -646,7 +752,7 @@ impl SimulationEngine {
                     }
                 }
             }
-            Tasks::Seed(_) | Tasks::Reset => {
+            Tasks::Seed(_) | Tasks::Reset | Tasks::SeedAndStart(_, _) => {
                 if !engine.stopping.load(Ordering::SeqCst) {
                     Self::initiate_spread(engine);
                 }
@@ -752,7 +858,12 @@ impl SimulationEngine {
         }
     }
 
-    fn commit_bucket(bucket_start: usize, bucket_end: usize, engine: &Arc<Self>) {
+    fn commit_bucket(
+        bucket_start: usize,
+        bucket_end: usize,
+        engine: &Arc<Self>,
+        thread_idx: usize,
+    ) {
         let space = &engine.space;
         let storage = space.storage();
         let masks = space.mask.read();
@@ -760,21 +871,27 @@ impl SimulationEngine {
         let last = masks.last_state_mask();
         let next = masks.next_state_mask();
 
+        // SAFETY: thread_idx is unique to this worker thread and fixed for its lifetime.
+        // No other thread accesses this index in commit_buffers.
+        let buffer = unsafe { &mut *engine.commit_buffers[thread_idx].inner.value.get() };
+
         for bucket_idx in bucket_start..bucket_end {
             if bucket_idx >= storage.buckets.len() {
                 break;
             }
 
-            let mut incoming = Vec::with_capacity(1024);
-            engine.scratchpad.get_column_into(bucket_idx, &mut incoming);
+            buffer.incoming.clear();
+            engine
+                .scratchpad
+                .get_column_into(bucket_idx, &mut buffer.incoming);
 
-            incoming.sort_unstable_by(|a, b| {
+            buffer.incoming.sort_unstable_by(|a, b| {
                 crate::tree::CellTree::compare_coords((a.x, a.y), (b.x, b.y))
             });
 
-            let mut coords = Vec::with_capacity(incoming.len());
-            for c in &incoming {
-                coords.push((c.x, c.y));
+            buffer.coords.clear();
+            for c in &buffer.incoming {
+                buffer.coords.push((c.x, c.y));
             }
 
             let mut bucket_lock = storage.buckets[bucket_idx]
@@ -785,7 +902,7 @@ impl SimulationEngine {
             // 1. Ensure nodes exist and increment neighbor counts for the SOURCE mask (last)
             // so that calculate_next_state can use the correct neighborhood density.
             bucket_lock.apply_batch(
-                &coords,
+                &buffer.coords,
                 |x, y| Cell::new(x, y, CellState::Dead, last),
                 |cell| cell.increment_neighbor_count(last),
             );
@@ -828,6 +945,10 @@ impl SimulationEngine {
         self.target_generation.store(u64::MAX, Ordering::SeqCst);
         self.stopping.store(false, Ordering::SeqCst);
         self.work_queue.enqueue(Tasks::Start);
+    }
+
+    pub fn set_target_generation(&self, target: u64) {
+        self.target_generation.store(target, Ordering::SeqCst);
     }
 
     pub fn start_generations(&self, count: u64) {
@@ -875,6 +996,11 @@ impl SimulationEngine {
 
     pub fn seed(&self, pattern: String) {
         self.work_queue.enqueue(Tasks::Seed(pattern));
+    }
+
+    pub fn seed_and_start(&self, pattern: String, target_generations: Option<u64>) {
+        self.work_queue
+            .enqueue(Tasks::SeedAndStart(pattern, target_generations));
     }
 
     pub fn register_pattern(&self, pattern: crate::patterns::Pattern) {

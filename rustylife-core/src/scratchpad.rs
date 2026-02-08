@@ -12,12 +12,12 @@ pub struct Candidate {
 
 /// aligned to 128 bytes to prevent false sharing on both 64-byte (x86) and 128-byte (some ARM) cache lines.
 #[repr(align(128))]
-struct CachePadded<T> {
-    value: T,
+pub struct CachePadded<T> {
+    pub value: T,
 }
 
 impl<T> CachePadded<T> {
-    fn new(value: T) -> Self {
+    pub fn new(value: T) -> Self {
         Self { value }
     }
 }

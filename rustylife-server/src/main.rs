@@ -216,10 +216,17 @@ fn main() {
     }
 
     if let Some(pattern) = args.seed {
-        engine.seed(pattern);
         if args.generations.is_some() || args.autostart {
-            engine.start();
+            engine.seed_and_start(pattern, args.generations);
+        } else {
+            engine.seed(pattern);
         }
+    } else if args.autostart {
+        // No seed provided, just start (e.g. continuing or default state)
+        if let Some(target) = args.generations {
+            engine.set_target_generation(target);
+        }
+        engine.start();
     }
 
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
