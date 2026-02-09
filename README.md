@@ -4,7 +4,7 @@ A high-performance implementation of John Conway's Game of Life in Rust, featuri
 
 ## Architecture
 
-- **`rustylife-core`**: The simulation engine (infinite grid, buckets, quadtrees).
+- **`rustylife-core`**: The simulation engine (infinite grid, buckets, binary search trees).
 - **`rustylife-server`**: The host process handling the simulation and networking (IPC, Web).
 - **`rustylife-client`**: A CLI/Terminal client for controlling the simulation.
 - **`rustylife-gui`**: A native GUI visualizer (using `egui`).
