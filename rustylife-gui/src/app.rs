@@ -362,7 +362,7 @@ impl eframe::App for RustyLifeApp {
                                     // Use last_offset to update Center with actual view?
                                     // Center is defined as view_offset relative to (0,0)?
                                     let center_x = (-self.view_offset.x / self.cell_size) as i64;
-                                    let center_y = (-self.view_offset.y / self.cell_size) as i64;
+                                    let center_y = (self.view_offset.y / self.cell_size) as i64;
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new("CENTER:")
