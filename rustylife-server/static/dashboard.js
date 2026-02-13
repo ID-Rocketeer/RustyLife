@@ -74,7 +74,7 @@ window.addEventListener('mousemove', (e) => {
         offsetY += dy;
         lastMouseX = e.clientX;
         lastMouseY = e.clientY;
-        if (lastState) renderCells(lastState.data, lastState.offset);
+        if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset);
         updateInstrumentation();
     }
 });
@@ -170,11 +170,6 @@ function renderCellsHybrid(meta, dataView, binaryOffset) {
     }
 }
 
-// Re-implement old function to redirect or just remove it?
-// We need to update existing calls to `renderCells` in resizeCanvas/mousemove
-function renderCells(data, offset) {
-    console.error("Legacy renderCells called! This should be Hybrid now.");
-}
 
 function updateTelemetry(meta) {
     if (!meta) return;
