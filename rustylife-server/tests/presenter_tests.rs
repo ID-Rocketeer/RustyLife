@@ -27,7 +27,15 @@ pub struct PresenterSubscriber {
 }
 
 impl EngineSubscriber for PresenterSubscriber {
-    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+    fn on_snapshot_available(
+        &self,
+        _generation: u64,
+        data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        _bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
             presenter.update_state(packet);

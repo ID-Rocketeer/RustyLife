@@ -7,6 +7,15 @@ pub fn fmt_num(val: i64, digits: usize, sign: bool) -> String {
     }
 }
 
+pub fn fmt_coord(val: i128, digits: usize, sign: bool) -> String {
+    let s = format!("{:0width$}", val.abs(), width = digits);
+    if sign {
+        format!("{}{}", if val >= 0 { "+" } else { "-" }, s)
+    } else {
+        s
+    }
+}
+
 pub fn format_si(val: f64, digits: usize, signed: bool) -> String {
     let units = ["", "K", "M", "G", "T"];
     // Sub-units: m (milli), u (micro), n (nano)

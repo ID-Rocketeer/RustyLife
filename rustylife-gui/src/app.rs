@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::utils::{fmt_num, format_si};
+use crate::utils::{fmt_coord, fmt_num, format_si};
 use crate::UserActionHandler;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -103,6 +103,8 @@ impl eframe::App for RustyLifeApp {
             is_running,
             is_connected,
             cores,
+            bounds,
+            expanse,
         ) = {
             let s = self.state.lock().unwrap();
             (
@@ -115,6 +117,8 @@ impl eframe::App for RustyLifeApp {
                 s.is_running,
                 s.is_connected,
                 s.cores,
+                s.bounds,
+                s.expanse(),
             )
         };
 
@@ -125,8 +129,9 @@ impl eframe::App for RustyLifeApp {
         self.last_generation = generation;
         self.last_update_time = Some(Instant::now());
 
-        // Header
+        // ... Header ...
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            // ... (rest of header unchanged, relying on context matching to skip)
             ui.horizontal(|ui| {
                 // Ombre Title: "RustyLife"
                 ui.horizontal(|ui| {
@@ -216,10 +221,22 @@ impl eframe::App for RustyLifeApp {
 
                 ui.separator();
                 if ui.button("In").clicked() || ui.input(|i| i.key_pressed(egui::Key::Plus)) {
-                    self.cell_size = (self.cell_size + 1.0).min(32.0);
+                    let old_size = self.cell_size;
+                    let new_size = (self.cell_size + 1.0).min(32.0);
+                    if new_size != old_size {
+                        let factor = new_size / old_size;
+                        self.view_offset *= factor;
+                        self.cell_size = new_size;
+                    }
                 }
                 if ui.button("Out").clicked() || ui.input(|i| i.key_pressed(egui::Key::Minus)) {
-                    self.cell_size = (self.cell_size - 1.0).max(1.0);
+                    let old_size = self.cell_size;
+                    let new_size = (self.cell_size - 1.0).max(1.0);
+                    if new_size != old_size {
+                        let factor = new_size / old_size;
+                        self.view_offset *= factor;
+                        self.cell_size = new_size;
+                    }
                 }
 
                 ui.separator();
@@ -239,6 +256,15 @@ impl eframe::App for RustyLifeApp {
                 }
             });
         });
+
+        // ... (Header body omitted for brevity, logic handles matching) ...
+        // Actually replace_file_content needs exact matches.
+        // I should target the block I want to change.
+        // I will split this into two replacements if possible, or just one large one if context allows.
+        // The first modification is the destructuring block.
+        // The second modification is the footer content.
+
+        // Let's do destructuring first.
 
         // Footer
         egui::TopBottomPanel::bottom("footer")
@@ -333,6 +359,8 @@ impl eframe::App for RustyLifeApp {
                                     ui.add_space(20.0);
 
                                     // Center
+                                    // Use last_offset to update Center with actual view?
+                                    // Center is defined as view_offset relative to (0,0)?
                                     let center_x = (-self.view_offset.x / self.cell_size) as i64;
                                     let center_y = (-self.view_offset.y / self.cell_size) as i64;
                                     ui.add(
@@ -432,23 +460,76 @@ impl eframe::App for RustyLifeApp {
 
                     ui.add_space(4.0); // Spacing between rows
 
-                    // --- Row 2: Status (Right Aligned) ---
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.style_mut().spacing.item_spacing.x = 0.0; // Remove default spacing for precise control
-                        ui.add_space(5.0); // Right padding
-                        ui.label(
-                            egui::RichText::new(status_text)
-                                .color(text_color)
-                                .size(16.0), // Increased to 16.0 (Default Body Size)
-                        );
-                        ui.add_space(4.0); // Exact match for 0.25rem (4px) from CSS
+                    // --- Row 2: Bounds, Expanse, Status ---
+                    ui.horizontal(|ui| {
+                        ui.style_mut().spacing.item_spacing.x = 0.0; // Tighten label-to-data spacing
 
-                        let (dot_rect, _) =
-                            ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover()); // Exact 6px size
-                        if let Some(glow) = glow_color {
-                            ui.painter().circle_filled(dot_rect.center(), 6.0, glow);
-                        }
-                        ui.painter().circle_filled(dot_rect.center(), 3.0, color);
+                        // Bounds (always display - already in Cartesian from server)
+                        let ((bx1, by1), (bx2, by2)) = bounds.unwrap_or(((0, 0), (0, 0)));
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new("BOUNDS:")
+                                    .color(crate::style::COLOR_LABEL)
+                                    .font(egui::FontId::proportional(11.0))
+                                    .strong()
+                                    .underline(),
+                            )
+                            .sense(egui::Sense::hover()),
+                        )
+                        .on_hover_text("Bounding box of all living cells");
+                        ui.monospace(
+                            egui::RichText::new(format!(
+                                "[ ({}, {}) -> ({}, {}) ]",
+                                fmt_coord(bx1, 9, true),
+                                fmt_coord(by1, 9, true),
+                                fmt_coord(bx2, 9, true),
+                                fmt_coord(by2, 9, true)
+                            ))
+                            .color(crate::style::COLOR_DATA),
+                        );
+                        ui.add_space(20.0);
+
+                        // Expanse (always display)
+                        let (exp_w, exp_h) = expanse;
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new("EXPANSE:")
+                                    .color(crate::style::COLOR_LABEL)
+                                    .font(egui::FontId::proportional(11.0))
+                                    .strong()
+                                    .underline(),
+                            )
+                            .sense(egui::Sense::hover()),
+                        )
+                        .on_hover_text("Width x Height of the bounding box");
+                        ui.monospace(
+                            egui::RichText::new(format!(
+                                "[ {} \u{00D7} {} ]",
+                                fmt_num(exp_w as i64, 9, false),
+                                fmt_num(exp_h as i64, 9, false)
+                            ))
+                            .color(crate::style::COLOR_DATA),
+                        );
+                        ui.add_space(20.0);
+
+                        // Status (Right Aligned)
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.style_mut().spacing.item_spacing.x = 0.0; // Remove default spacing for precise control
+                            ui.add_space(5.0); // Right padding
+                            ui.label(
+                                egui::RichText::new(status_text)
+                                    .color(text_color)
+                                    .size(16.0), // Increased to 16.0 (Default Body Size)
+                            );
+                            ui.add_space(4.0); // Exact match for 0.25rem (4px) from CSS
+
+                            let (dot_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(6.0, 6.0), egui::Sense::hover()); // Exact 6px size
+                            if let Some(glow) = glow_color {
+                                ui.painter().circle_filled(dot_rect.center(), 6.0, glow);
+                            }
+                            ui.painter().circle_filled(dot_rect.center(), 3.0, color);
+                        });
                     });
                 });
             });

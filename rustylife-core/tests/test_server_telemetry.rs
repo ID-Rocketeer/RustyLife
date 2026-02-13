@@ -8,13 +8,17 @@ struct TelemetrySubscriber {
 }
 
 impl EngineSubscriber for TelemetrySubscriber {
-    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+    fn on_snapshot_available(
+        &self,
+        _generation: u64,
+        data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        _bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
         // Decode packet to extract telemetry
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
-            // println!(
-            //     "Subscriber received Gen {}: WorkRate={:.2}, NetRate={:.2}",
-            //     packet.generation, packet.work_rate, packet.net_rate
-            // );
             self.packets.lock().unwrap().push((
                 packet.generation,
                 packet.work_rate,
@@ -38,10 +42,10 @@ fn test_telemetry_work_and_net() {
     engine.add_subscriber(subscriber.clone());
 
     // Register Blinker
-    engine.register_pattern(rustylife_core::patterns::Pattern {
+    engine.register_pattern(rustylife_core::PatternInfo {
         name: "blinker".to_string(),
         description: "Blinker p2".to_string(),
-        source: rustylife_core::patterns::PatternSource::Rle("x = 3, y = 3\n3o!".to_string()),
+        rle: "x = 3, y = 3\n3o!".to_string(),
     });
 
     // 3. Scenario: Blinker

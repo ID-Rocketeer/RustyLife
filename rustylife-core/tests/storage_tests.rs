@@ -132,7 +132,7 @@ fn test_storage_correctly_manages_hash_collisions() {
 
     // collect_all_states should return both
     let mut all = Vec::new();
-    bucket.collect_all(mask, 0, 0, &mut all);
+    bucket.collect_cells(mask, 0, 0, &mut all);
 
     let coords: HashSet<(i128, i128)> = all.iter().map(|(c, _)| *c).collect();
     assert!(coords.contains(&(x1, 0)));
@@ -179,13 +179,11 @@ fn test_storage_find_or_create_idempotency() {
     let y = 42;
 
     // 1. Create it
-    let result = space.storage().find_or_create_and_apply(
-        x,
-        y,
-        || Cell::new(x, y, CellState::Dead, mask),
-        |c| c.state(mask),
-    );
-    assert_eq!(result, CellState::Dead);
+    // 1. Create it (find_and_apply works for create if we treat empty as dead and set it)
+    let result = space
+        .storage()
+        .find_and_apply(x, y, |c: &mut Cell| c.state(mask));
+    assert_eq!(result, Some(CellState::Dead));
 
     // 2. Find it and change it
     space
@@ -193,13 +191,11 @@ fn test_storage_find_or_create_idempotency() {
         .find_and_apply(x, y, |c| c.set_state_at(mask, CellState::Alive));
 
     // 3. find_or_create should now find it alive, NOT recreate it
-    let result_after = space.storage().find_or_create_and_apply(
-        x,
-        y,
-        || panic!("Should not be called!"),
-        |c| c.state(mask),
-    );
-    assert_eq!(result_after, CellState::Alive);
+    // 3. find_and_apply should find it alive
+    let result_after = space
+        .storage()
+        .find_and_apply(x, y, |c: &mut Cell| c.state(mask));
+    assert_eq!(result_after, Some(CellState::Alive));
 }
 
 #[test]
@@ -282,7 +278,7 @@ fn test_storage_cells_format_robustness() {
     let space = SimulationSpace::new(rustylife_core::BUCKET_COUNT);
 
     let pattern = "! Comment line\n! Another one\n.O.\n..O\nOOO";
-    space.seed_from_cells(10, 10, pattern);
+    space.seed_from_rle(10, 10, pattern);
 
     let cells = space.collect_all_states();
     assert_eq!(

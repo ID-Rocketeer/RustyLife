@@ -13,6 +13,7 @@ pub struct AppState {
     pub cores: usize,
     pub is_connected: bool,
     pub patterns: Vec<rustylife_core::PatternInfo>,
+    pub bounds: Option<((i128, i128), (i128, i128))>,
 }
 
 impl Default for AppState {
@@ -27,8 +28,21 @@ impl Default for AppState {
             work_rate: 0.0,
             net_rate: 0.0,
             cores: 0,
-            is_connected: false, // Default to false, Native/Server execution should set to true
+            is_connected: false,
             patterns: Vec::new(),
+            bounds: None,
+        }
+    }
+}
+
+impl AppState {
+    pub fn expanse(&self) -> (u64, u64) {
+        if let Some(((min_x, min_y), (max_x, max_y))) = self.bounds {
+            let width = (max_x - min_x).abs() as u64 + 1;
+            let height = (max_y - min_y).abs() as u64 + 1;
+            (width, height)
+        } else {
+            (0, 0)
         }
     }
 }
@@ -49,6 +63,10 @@ impl SimulationPresenter for AppState {
         self.gps = packet.gps;
         self.work_rate = packet.work_rate;
         self.net_rate = packet.net_rate;
+    }
+
+    fn update_bounds(&mut self, bounds: Option<((i128, i128), (i128, i128))>) {
+        self.bounds = bounds;
     }
 
     fn get_viewport(&self) -> Option<((i128, i128), (i128, i128))> {

@@ -8,3 +8,4 @@ staging/
 *.json.gz
 *.binsnap
 *.log
+*.py

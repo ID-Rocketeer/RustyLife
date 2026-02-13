@@ -14,6 +14,17 @@ export function fmtNum(val, digits, sign) {
 }
 
 /**
+ * Formats a coordinate with padding and optional sign (alias for fmtNum for i128 coordinates).
+ * @param {number} val The coordinate value to format.
+ * @param {number} digits Minimum number of digits (padding).
+ * @param {boolean} sign Whether to include a explicit +/- sign.
+ * @returns {string} The formatted string.
+ */
+export function fmtCoord(val, digits, sign) {
+    return fmtNum(val, digits, sign);
+}
+
+/**
  * Formats a value using SI units (K, M, G, T).
  * @param {number} val The value to format.
  * @param {number} digits Number of decimal places.

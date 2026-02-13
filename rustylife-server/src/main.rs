@@ -57,15 +57,40 @@ pub struct Args {
     pub autostart: bool,
 }
 
-/// Broadcasts only the generation number when a snapshot is ready.
+fn to_cartesian_bounds(
+    bounds: Option<((i128, i128), (i128, i128))>,
+) -> Option<((i128, i128), (i128, i128))> {
+    bounds.map(|((min_x, min_y), (max_x, max_y))| {
+        // Negate Y to convert from top-down to Cartesian (bottom-up)
+        // Swap to maintain bottom-left to top-right ordering
+        ((min_x, -max_y), (max_x, -min_y))
+    })
+}
+
+/// Broadcasts result when a snapshot is ready.
 pub struct ServerEngineSubscriber {
     pub engine: Arc<SimulationEngine>,
-    pub tx: broadcast::Sender<u64>,
+    pub tx: broadcast::Sender<Response>,
 }
 
 impl EngineSubscriber for ServerEngineSubscriber {
-    fn on_snapshot_available(&self, generation: u64, _data: Arc<Vec<u8>>) -> bool {
-        let _ = self.tx.send(generation);
+    fn on_snapshot_available(
+        &self,
+        generation: u64,
+        _data: Arc<Vec<u8>>,
+        gps: f64,
+        work_rate: f64,
+        net_rate: f64,
+        bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
+        let resp = Response::SnapshotAvailable {
+            generation,
+            gps,
+            work_rate,
+            net_rate,
+            bounds: to_cartesian_bounds(bounds),
+        };
+        let _ = self.tx.send(resp);
         true
     }
 }
@@ -76,7 +101,15 @@ pub struct BenchmarkSubscriber {
 }
 
 impl EngineSubscriber for BenchmarkSubscriber {
-    fn on_snapshot_available(&self, generation: u64, _data: Arc<Vec<u8>>) -> bool {
+    fn on_snapshot_available(
+        &self,
+        generation: u64,
+        _data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        _bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
         if generation >= self.target_generation {
             println!("Reached target generation {}. Exiting...", generation);
             std::process::exit(0);
@@ -91,18 +124,23 @@ pub struct PresenterSubscriber {
 }
 
 impl EngineSubscriber for PresenterSubscriber {
-    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
+    fn on_snapshot_available(
+        &self,
+        _generation: u64,
+        data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
 
-            // Filter based on Presenter's viewport
-            if let Some(_) = presenter.get_viewport() {
-                // The presenter's update_state will handle the viewport filtering itself
-                // efficiently now that we pass the packet with an iterator.
-                presenter.update_state(packet);
-            } else {
-                presenter.update_state(packet);
-            }
+            // Direct update for bounds not in binary packet
+            // Transform bounds to Cartesian coordinates
+            let cartesian_bounds = to_cartesian_bounds(bounds);
+            presenter.update_state(packet);
+            presenter.update_bounds(cartesian_bounds);
         }
         true
     }
@@ -110,7 +148,7 @@ impl EngineSubscriber for PresenterSubscriber {
 
 struct AppStateEnv {
     engine: Arc<SimulationEngine>,
-    tx: broadcast::Sender<u64>,
+    tx: broadcast::Sender<Response>,
     shutdown_tx: broadcast::Sender<()>,
     cores: usize,
 }
@@ -182,7 +220,7 @@ fn main() {
     println!("Loading patterns from ./patterns directory...");
     load_dynamic_patterns(&engine);
 
-    let (tx, _rx) = broadcast::channel::<u64>(100);
+    let (tx, _rx) = broadcast::channel::<Response>(100);
 
     // Register subscriber for real-time broadcasts
     let subscriber = Arc::new(ServerEngineSubscriber {
@@ -354,10 +392,10 @@ fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
                             }
                         }
 
-                        engine.register_pattern(rustylife_core::patterns::Pattern {
+                        engine.register_pattern(rustylife_core::PatternInfo {
                             name: name.clone(),
                             description,
-                            source: rustylife_core::patterns::PatternSource::Rle(content),
+                            rle: content,
                         });
                         println!("Loaded dynamic pattern: {}", name);
                     }
@@ -369,6 +407,23 @@ fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
             "Warning: No local './patterns' directory found. Ensure build script is running or patterns are deployed."
         );
         // We do NOT create the directory anymore, as it is a build artifact.
+    }
+}
+
+fn make_snapshot_response(engine: &SimulationEngine) -> Response {
+    let (gps, work, net) = {
+        let t = engine.telemetry.lock().unwrap();
+        (t.gps, t.work_rate_ema, t.net_rate_ema)
+    };
+    // Transform bounds to Cartesian coordinates
+    let bounds = to_cartesian_bounds(engine.space.bounds());
+
+    Response::SnapshotAvailable {
+        generation: engine.generation(),
+        gps,
+        work_rate: work,
+        net_rate: net,
+        bounds,
     }
 }
 
@@ -422,8 +477,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
     let mut rx = state.tx.subscribe();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
 
-    // Send the current generation immediately so the client can sync up
-    let current_gen = state.engine.generation();
     // Send Welcome message
     let welcome = Response::Welcome {
         cores: state.cores,
@@ -433,7 +486,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
         .send(Message::Binary(welcome.to_bytes().into()))
         .await;
 
-    let resp = Response::SnapshotAvailable(current_gen);
+    let resp = make_snapshot_response(&state.engine);
     let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
 
     loop {
@@ -467,8 +520,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 .await;
 
                                 // Force a UI update so the client knows we stopped
-                                let current_gen = state.engine.generation();
-                                let resp = Response::SnapshotAvailable(current_gen);
+                                let resp = make_snapshot_response(&state.engine);
                                 let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
                             }
                             Request::Seed(pattern) => {
@@ -493,8 +545,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                 break;
             }
             result = rx.recv() => {
-                if let Ok(generation) = result {
-                    let resp = Response::SnapshotAvailable(generation);
+                if let Ok(resp) = result {
+                    // resp is already Response::SnapshotAvailable
                     if socket.send(Message::Binary(resp.to_bytes().into())).await.is_err() {
                         break;
                     }
@@ -510,8 +562,6 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
     let mut rx = state.tx.subscribe();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
 
-    // Send the current generation immediately so the client can sync up
-    let current_gen = state.engine.generation();
     // Send Welcome message
     let welcome = Response::Welcome {
         cores: state.cores,
@@ -520,7 +570,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
     let bytes = welcome.to_bytes();
     let _ = writer.write_all(&bytes).await;
 
-    let resp = Response::SnapshotAvailable(current_gen);
+    let resp = make_snapshot_response(&state.engine);
     let bytes = resp.to_bytes();
     let _ = writer.write_all(&bytes).await;
 
@@ -577,8 +627,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                 break;
             }
             result = rx.recv() => {
-                if let Ok(generation) = result {
-                    let resp = Response::SnapshotAvailable(generation);
+                if let Ok(resp) = result {
                     let bytes = resp.to_bytes();
                     if writer.write_all(&bytes).await.is_err() {
                         break;

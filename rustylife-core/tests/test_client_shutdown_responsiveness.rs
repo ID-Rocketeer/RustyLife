@@ -9,7 +9,15 @@ struct MockClient {
 }
 
 impl EngineSubscriber for MockClient {
-    fn on_snapshot_available(&self, _generation: u64, _data: Arc<Vec<u8>>) -> bool {
+    fn on_snapshot_available(
+        &self,
+        _generation: u64,
+        _data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        _bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
         // In real app, client processes snapshot.
         // If engine says "running", client updates UI.
         true
@@ -26,10 +34,10 @@ fn test_repro_client_deadlock() {
     engine.add_subscriber(client.clone());
 
     // 0. Register Pattern
-    engine.register_pattern(rustylife_core::patterns::Pattern {
+    engine.register_pattern(rustylife_core::PatternInfo {
         name: "r-pentomino".to_string(),
         description: "Test pattern".to_string(),
-        source: rustylife_core::patterns::PatternSource::Rle("x = 3, y = 3\n2o$2o$2o!".to_string()),
+        rle: "x = 3, y = 3\n2o$2o$2o!".to_string(),
     });
 
     // 1. Run (Atomic)

@@ -94,6 +94,14 @@ async fn main() -> anyhow::Result<()> {
                 let mut next_request_needed = false;
                 let mut latest_generation = 0;
 
+                // Cache telemetry/bounds from SnapshotAvailable, apply when BinaryStateHeader arrives
+                let mut cached_telemetry: Option<(
+                    f64,
+                    f64,
+                    f64,
+                    Option<((i128, i128), (i128, i128))>,
+                )> = None;
+
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
                 loop {
@@ -118,8 +126,19 @@ async fn main() -> anyhow::Result<()> {
                                         s.cores = cores;
                                         s.patterns = patterns;
                                     }
-                                    rustylife_core::Response::SnapshotAvailable(generation) => {
+                                    rustylife_core::Response::SnapshotAvailable { generation, gps, work_rate, net_rate, bounds } => {
                                         latest_generation = generation;
+
+                                        // Update bounds in state for UI display
+                                        {
+                                            let mut s = state_clone.lock().unwrap();
+                                            s.update_bounds(bounds);
+                                            // Also update telemetry from SnapshotAvailable for real-time display
+                                            s.gps = gps;
+                                            s.work_rate = work_rate;
+                                            s.net_rate = net_rate;
+                                        }
+
                                         if !pending_request {
                                             // Send Request for data
                                             let viewport = {
@@ -144,6 +163,14 @@ async fn main() -> anyhow::Result<()> {
                                             let mut s = state_clone.lock().unwrap();
                                             // SimulationPresenter trait is implemented for AppState in rustylife-gui
                                             s.update_state(packet);
+
+                                            // Apply cached telemetry/bounds from SnapshotAvailable
+                                            if let Some((gps, work_rate, net_rate, bounds)) = cached_telemetry.take() {
+                                                s.gps = gps;
+                                                s.work_rate = work_rate;
+                                                s.net_rate = net_rate;
+                                                s.update_bounds(bounds);
+                                            }
                                         }
 
                                         pending_request = false;

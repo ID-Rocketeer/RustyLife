@@ -1,7 +1,7 @@
 use rustylife_core::engine::{EngineSubscriber, SimulationEngine};
 use rustylife_core::space::SimulationSpace;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 const TARGET_GENERATIONS: usize = 1000;
@@ -313,13 +313,25 @@ o3b4o3bo18bo$670b3o2bob3obo$674b2ob3ob2o$675b2ob4o$677bo2$640b2o$640b
 
 struct CompletionTracker {
     current: AtomicUsize,
-    target: usize,
+    limit: u64,
+    stop_signal: AtomicBool,
 }
 
 impl EngineSubscriber for CompletionTracker {
-    fn on_snapshot_available(&self, _gen: u64, _data: Arc<Vec<u8>>) -> bool {
-        let c = self.current.fetch_add(1, Ordering::Relaxed) + 1;
-        c < self.target
+    fn on_snapshot_available(
+        &self,
+        generation: u64,
+        _data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        _bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
+        self.current.fetch_add(1, Ordering::SeqCst);
+        if generation >= self.limit {
+            self.stop_signal.store(true, Ordering::SeqCst);
+        }
+        true
     }
 }
 
@@ -329,7 +341,8 @@ fn run_single_pass(threads: usize, buckets: usize, rle: &str) -> Duration {
 
     let tracker = Arc::new(CompletionTracker {
         current: AtomicUsize::new(0),
-        target: TARGET_GENERATIONS,
+        limit: TARGET_GENERATIONS as u64,
+        stop_signal: AtomicBool::new(false),
     });
 
     let engine = SimulationEngine::new(space.clone(), threads);

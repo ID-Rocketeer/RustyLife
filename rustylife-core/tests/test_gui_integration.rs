@@ -37,7 +37,13 @@ async fn mock_server_ipc(stream: TcpStream, engine: Arc<SimulationEngine>) {
                 Request::Reset => engine.reset(),
                 Request::GetState { generation, .. } => {
                     // Ack with SnapshotAvailable for test
-                    let resp = Response::SnapshotAvailable(generation);
+                    let resp = Response::SnapshotAvailable {
+                        generation,
+                        gps: 0.0,
+                        work_rate: 0.0,
+                        net_rate: 0.0,
+                        bounds: None,
+                    };
                     let _ = writer.write_all(&resp.to_bytes()).await;
                 }
                 _ => {}

@@ -8,6 +8,8 @@ pub struct Candidate {
     pub hash_idx: usize,
     pub x: i128,
     pub y: i128,
+    pub payload: u64,
+    pub mask: u8,
 }
 
 /// aligned to 128 bytes to prevent false sharing on both 64-byte (x86) and 128-byte (some ARM) cache lines.
@@ -52,12 +54,18 @@ impl Scratchpad {
     /// Push a candidate into the scratchpad.
     /// SAFETY: thread_idx must be unique to the calling thread for the duration of its use.
     /// The caller must ensure no other thread is accessing the same thread_idx.
-    pub fn push_candidate(&self, thread_idx: usize, x: i128, y: i128) {
+    pub fn push_candidate(&self, thread_idx: usize, x: i128, y: i128, payload: u64, mask: u8) {
         let hash_idx = hash_coordinates(x, y, self.bucket_count);
         unsafe {
             // Access .value inside the padded wrapper
             let vec_ptr = self.rows[thread_idx][hash_idx].value.get();
-            (*vec_ptr).push(Candidate { hash_idx, x, y });
+            (*vec_ptr).push(Candidate {
+                hash_idx,
+                x,
+                y,
+                payload,
+                mask,
+            });
         }
     }
 

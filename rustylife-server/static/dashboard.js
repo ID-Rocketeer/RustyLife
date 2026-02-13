@@ -1,4 +1,4 @@
-import { fmtNum, formatSI } from './utils.js';
+import { fmtNum, fmtCoord, formatSI } from './utils.js';
 import { encodeRequest } from './protocol.js';
 
 const countEl = document.getElementById('count');
@@ -15,6 +15,8 @@ const zoomOutBtn = document.getElementById('zoom-out-btn');
 
 const extentEl = document.getElementById('extent-display');
 const centerEl = document.getElementById('center-display');
+const boundsEl = document.getElementById('bounds-display');
+const expanseEl = document.getElementById('expanse-display');
 const zoomEl = document.getElementById('zoom-display');
 const workEl = document.getElementById('work-display');
 const netEl = document.getElementById('net-display');
@@ -36,7 +38,7 @@ let nextRequestPending = false;
 let debounceTimeout = null;
 
 // Telemetry State (Server-Side)
-// No local state needed for rates anymore.
+let cachedTelemetry = { gps: 0, work_rate: 0, net_rate: 0, bounds: null };
 
 // Panning State
 let offsetX = 0;
@@ -195,6 +197,21 @@ function updateTelemetry(meta) {
     // User: "As breeder 1 grows the GPS will steadily fall... We should use engineering notation to display this value in all UIs."
     // formatSI(num, width, sign)
     gpsEl.innerText = formatSI(gps, 3, false);
+
+    // Bounds and Expanse - use cachedTelemetry if not in current meta
+    const bounds = meta.bounds || cachedTelemetry.bounds;
+    if (bounds) {
+        const [[minX, minY], [maxX, maxY]] = bounds;
+        // Bounds already in Cartesian coordinates from server
+        boundsEl.innerText = `[ (${fmtCoord(minX, 9, true)}, ${fmtCoord(minY, 9, true)}) → (${fmtCoord(maxX, 9, true)}, ${fmtCoord(maxY, 9, true)}) ]`;
+
+        const width = Math.abs(maxX - minX) + 1;
+        const height = Math.abs(maxY - minY) + 1;
+        expanseEl.innerText = `[ ${fmtNum(width, 9, false)} × ${fmtNum(height, 9, false)} ]`;
+    } else {
+        boundsEl.innerText = `[ (${fmtCoord(0, 9, true)}, ${fmtCoord(0, 9, true)}) → (${fmtCoord(0, 9, true)}, ${fmtCoord(0, 9, true)}) ]`;
+        expanseEl.innerText = `[ ${fmtNum(0, 9, false)} × ${fmtNum(0, 9, false)} ]`;
+    }
 }
 
 function sendRequest(type, payload = null) {
@@ -306,13 +323,22 @@ function connect() {
         // So `header.type` === "BinaryStateHeader", and `header.payload` is the object with fields.
 
         if (header.type === "SnapshotAvailable") {
-            const gen = BigInt(header.payload); // payload is the u64
+            const { generation, gps, work_rate, net_rate, bounds } = header.payload;
+            const gen = BigInt(generation);
             if (gen === 0n && currentGen !== 0n) {
                 offsetX = 0;
                 offsetY = 0;
                 updateInstrumentation();
             }
             currentGen = gen;
+
+            // Update generation display immediately for real-time feedback
+            genEl.innerText = gen.toString();
+
+            // Cache telemetry for real-time display
+            cachedTelemetry = { gps, work_rate, net_rate, bounds };
+            updateTelemetry(cachedTelemetry);
+
             requestState();
 
         } else if (header.type === "Welcome") {

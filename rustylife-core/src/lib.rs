@@ -5,6 +5,7 @@
 //! sparse storage system, the staged simulation engine, and the binary communication
 //! protocol.
 
+pub mod block_tree;
 pub mod cell;
 pub mod engine;
 pub mod hash;
@@ -24,6 +25,7 @@ use serde::{Deserialize, Serialize};
 pub struct PatternInfo {
     pub name: String,
     pub description: String,
+    pub rle: String,
 }
 
 /// Represents a request from a client to the simulation server.
@@ -48,7 +50,13 @@ pub enum Request {
 pub enum Response {
     Ok,
     /// Notification that a new snapshot is available.
-    SnapshotAvailable(u64),
+    SnapshotAvailable {
+        generation: u64,
+        gps: f64,
+        work_rate: f64,
+        net_rate: f64,
+        bounds: Option<((i128, i128), (i128, i128))>,
+    },
     /// A generic error message.
     Error(String),
     /// Initial handshake with server capabilities.
@@ -120,6 +128,9 @@ impl Response {
 pub trait SimulationPresenter: Send + Sync {
     /// Update the presenter with a new simulation packet.
     fn update_state(&mut self, packet: BinaryPacket<'_>);
+
+    /// Update the presenter with bounds information.
+    fn update_bounds(&mut self, _bounds: Option<((i128, i128), (i128, i128))>) {}
 
     /// Get the current desired viewport.
     fn get_viewport(&self) -> Option<((i128, i128), (i128, i128))> {

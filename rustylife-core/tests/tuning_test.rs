@@ -23,11 +23,17 @@ struct GenerationTracker {
 }
 
 impl EngineSubscriber for GenerationTracker {
-    fn on_snapshot_available(&self, _generation: u64, data: Arc<Vec<u8>>) -> bool {
-        if data.is_empty() {
-            return true;
-        }
-
+    fn on_snapshot_available(
+        &self,
+        _generation: u64,
+        _data: Arc<Vec<u8>>,
+        _gps: f64,
+        _work_rate: f64,
+        _net_rate: f64,
+        _bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> bool {
+        // The `current` field is still used for tracking progress for bail-out calculation,
+        // but the primary stop condition now uses `generation`.
         let current = self.current.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Dynamic Bail-out Check
