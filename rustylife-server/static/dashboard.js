@@ -32,6 +32,7 @@ let scale = 4; // Initial zoom: 4 pixels per cell (Range: 1-16)
 let isRunning = false;
 let lastState = null;
 let currentGen = 0n;
+let lastRenderedGen = -1n;
 let pendingRequest = false;
 let nextRequestPending = false;
 let debounceTimeout = null;
@@ -115,11 +116,12 @@ resizeCanvas();
 function renderCellsHybrid(meta, dataView, binaryOffset) {
     const gen = BigInt(meta.generation);
 
-    // Drop out-of-order packets, BUT accept Gen 0 (Reset)
-    if (gen < currentGen && gen !== 0n) return;
+    // Drop out-of-order packets based on what we actually rendered, BUT accept Gen 0 (Reset)
+    if (gen <= lastRenderedGen && gen !== 0n) return;
 
     lastState = { meta, dataView, binaryOffset }; // Store for re-rendering pan/zoom
-    currentGen = gen;
+    lastRenderedGen = gen;
+    currentGen = gen; // Keep synched
 
     const recordCount = Number(meta.record_count);
 
@@ -181,7 +183,7 @@ function updateTelemetry(meta) {
     }
 
     // Total Cells / Population
-    const total = meta.total_cells !== undefined ? BigInt(meta.total_cells) : 0n;
+    const total = meta.population !== undefined ? BigInt(meta.population) : 0n;
     countEl.innerText = total.toLocaleString();
 
     // Work Rate
@@ -320,7 +322,7 @@ function connect() {
         // Wait, serde_json default enum serialization:
         // #[serde(tag = "type", content = "payload")]
         // So it looks like: { "type": "SnapshotAvailable", "payload": 100 }
-        // Or: { "type": "BinaryStateHeader", "generation": ..., "total_cells": ... } (Struct variant is flattened?)
+        // Or: { "type": "BinaryStateHeader", "generation": ..., "population": ... } (Struct variant is flattened?)
         // Let's check lib.rs...
         // #[serde(tag = "type", content = "payload")] on enum Response
         // BUT BinaryStateHeader is a STRUCT VARIANT.
@@ -342,6 +344,7 @@ function connect() {
             if (gen === 0n && currentGen !== 0n) {
                 offsetX = 0;
                 offsetY = 0;
+                lastRenderedGen = -1n;
                 updateInstrumentation();
             }
             currentGen = gen;
@@ -375,7 +378,7 @@ function connect() {
             // Binary Payload starts after JSON
             // 4 + jsonLen
             const binaryOffset = 4 + jsonLen;
-            const meta = header.payload; // { generation, total_cells, is_running, record_count }
+            const meta = header.payload; // { generation, population, is_running, record_count }
 
             renderCellsHybrid(meta, view, binaryOffset);
 

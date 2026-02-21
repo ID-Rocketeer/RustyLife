@@ -84,12 +84,12 @@ impl EngineSubscriber for ServerEngineSubscriber {
         net_rate: f64,
         bounds: Option<((i128, i128), (i128, i128))>,
     ) -> bool {
-        let total_cells = self
+        let population = self
             .engine
             .living_count
             .load(std::sync::atomic::Ordering::Relaxed);
         let telemetry = Telemetry {
-            total_cells,
+            population,
             is_running,
             gps,
             work_rate,
@@ -150,9 +150,9 @@ impl EngineSubscriber for PresenterSubscriber {
             let mut presenter = self.presenter.lock().unwrap();
 
             // Reconstruct telemetry for internal GUI
-            let total_cells = self.engine.living_count.load(Ordering::Relaxed);
+            let population = self.engine.living_count.load(Ordering::Relaxed);
             let telemetry = Telemetry {
-                total_cells,
+                population,
                 is_running,
                 gps,
                 work_rate,
@@ -203,7 +203,7 @@ impl UserActionHandler for ServerActionHandler {
 
             // Also grab atomic counters to keep UI responsive even if snapshots lag
             s.generation = self.engine.generation();
-            s.total_cells = self
+            s.population = self
                 .engine
                 .living_count
                 .load(std::sync::atomic::Ordering::Relaxed);
@@ -447,7 +447,7 @@ fn make_snapshot_response(engine: &SimulationEngine) -> Response {
     let bounds = to_cartesian_bounds(engine.space.bounds());
 
     let telemetry = Telemetry {
-        total_cells: engine.living_count.load(Ordering::Relaxed),
+        population: engine.living_count.load(Ordering::Relaxed),
         is_running: !engine.stopping.load(Ordering::Relaxed),
         gps,
         work_rate: work,
