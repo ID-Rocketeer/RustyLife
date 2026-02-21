@@ -58,6 +58,11 @@ fn test_telemetry_work_and_net() {
     // Expected: Work=4, Net=0.
     engine.seed("blinker".to_string());
 
+    // Wait for seed task to fully process and allow the system timer to advance,
+    // guaranteeing a delta > 0.0 for the EMA telemetry calculation on Windows.
+    wait_for_idle(&engine);
+    std::thread::sleep(Duration::from_millis(15));
+
     // Step to Gen 1
     engine.step();
 
@@ -86,5 +91,15 @@ fn test_telemetry_work_and_net() {
         let packets = subscriber.packets.lock().unwrap();
         println!("Received packets: {:?}", *packets);
         panic!("Timed out waiting for Generation 1 snapshot");
+    }
+}
+
+fn wait_for_idle(engine: &SimulationEngine) {
+    let start = std::time::Instant::now();
+    while engine.work_queue_in_flight() > 0 {
+        if start.elapsed().as_secs() > 5 {
+            panic!("Timeout waiting for engine to idle.");
+        }
+        std::thread::yield_now();
     }
 }

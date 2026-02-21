@@ -811,6 +811,15 @@ fn test_engine_seed_processing() {
 
     engine.stop();
 
+    // Wait for quiescence
+    let wait_start = std::time::Instant::now();
+    while engine.work_queue_in_flight() > 0 {
+        if wait_start.elapsed().as_secs() > 5 {
+            panic!("Timeout waiting for engine to stop");
+        }
+        std::thread::yield_now();
+    }
+
     let _guard = space.read();
 
     let mut found = false;
