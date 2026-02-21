@@ -96,7 +96,7 @@ fn test_storage_correctly_manages_hash_collisions() {
     let mut collision_pairs = Vec::new();
     let mut buckets_found = std::collections::HashMap::new();
 
-    for x in 0..1000 {
+    for x in 0..10_000 {
         let bx = x >> 3;
         let by = 0;
         let h = hash_coordinates(bx, by, rustylife_core::BUCKET_COUNT);
@@ -329,10 +329,26 @@ fn test_storage_rle_complex_counts() {
     space.seed_from_rle(0, 0, rle);
 
     assert_eq!(space.collect_all_states().len(), 4);
-    assert!(space.storage().find_and_apply(0, 0, |_| true).is_some());
-    assert!(space.storage().find_and_apply(1, 0, |_| true).is_some());
-    assert!(space.storage().find_and_apply(2, 0, |_| true).is_none());
-    assert!(space.storage().find_and_apply(4, 0, |_| true).is_some());
+
+    let guard = space.read();
+    let mask = guard.current_state_mask();
+
+    assert_eq!(
+        space.storage().find_and_apply(0, 0, |c| c.state(mask)),
+        Some(CellState::Alive)
+    );
+    assert_eq!(
+        space.storage().find_and_apply(1, 0, |c| c.state(mask)),
+        Some(CellState::Alive)
+    );
+    assert_eq!(
+        space.storage().find_and_apply(2, 0, |c| c.state(mask)),
+        Some(CellState::Dead)
+    );
+    assert_eq!(
+        space.storage().find_and_apply(4, 0, |c| c.state(mask)),
+        Some(CellState::Alive)
+    );
 }
 #[test]
 fn test_storage_rle_noisy_format() {
