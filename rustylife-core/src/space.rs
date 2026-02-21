@@ -535,7 +535,7 @@ impl SimulationSpace {
         &self,
         path: &std::path::Path,
         generation: u64,
-        total_cells: u64,
+        population: u64,
         is_running: bool,
         record_count: u64,
     ) -> std::io::Result<()> {
@@ -543,7 +543,7 @@ impl SimulationSpace {
         self.encode_to_file_with_masks(
             path,
             generation,
-            total_cells,
+            population,
             is_running,
             record_count,
             guard.current_state_mask(),
@@ -556,7 +556,7 @@ impl SimulationSpace {
         &self,
         path: &std::path::Path,
         generation: u64,
-        total_cells: u64,
+        population: u64,
         is_running: bool,
         record_count: u64,
         current_mask: usize,
@@ -569,7 +569,7 @@ impl SimulationSpace {
         // 1. Write Header: [gen: u64][total: u64][is_running: u8][count: u64]
         let mut header = Vec::with_capacity(25);
         header.extend_from_slice(&generation.to_le_bytes());
-        header.extend_from_slice(&total_cells.to_le_bytes()); // survivors
+        header.extend_from_slice(&population.to_le_bytes()); // survivors
         header.push(if is_running { 1 } else { 0 });
         header.extend_from_slice(&record_count.to_le_bytes()); // records in file
 

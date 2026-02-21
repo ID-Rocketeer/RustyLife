@@ -31,7 +31,8 @@ fn test_full_user_cycle_stability() {
 
     // 3. Stop
     println!("3. Stopping...");
-    engine.stop(); // This blocks until idle
+    engine.stop(); // Stop is now async, enqueues Tasks::Stop
+    wait_for_idle(&engine);
     assert!(engine.is_stopped(), "Engine should be stopped");
     assert!(engine.work_queue_in_flight() == 0, "Queue should be empty");
     let gen_at_stop = engine.generation();

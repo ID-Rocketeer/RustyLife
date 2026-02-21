@@ -47,7 +47,7 @@ pub enum Request {
 /// Shared telemetry metrics for all interfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Telemetry {
-    pub total_cells: u64,
+    pub population: u64,
     pub is_running: bool,
     pub gps: f64,
     pub work_rate: f64,

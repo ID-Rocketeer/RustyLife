@@ -19,29 +19,27 @@ fn test_recursive_pruning() {
     let grandchild_idx = tree.arena.alloc(20, 20);
     tree.arena.nodes[child_idx as usize].right = Some(grandchild_idx);
 
-    // Mark all as dead
-    // (Newly allocated blocks are empty/dead by default)
+    // Mark the child node as Alive so it should be preserved
+    tree.arena.nodes[child_idx as usize].block.boards[0] = 1;
+
     assert!(tree.arena.nodes[root_idx as usize].block.is_dead());
-    assert!(tree.arena.nodes[child_idx as usize].block.is_dead());
+    assert!(!tree.arena.nodes[child_idx as usize].block.is_dead());
     assert!(tree.arena.nodes[grandchild_idx as usize].block.is_dead());
 
     // Initial Count: 3
     assert_eq!(tree.arena.nodes.len(), 3);
 
-    // Prune 1: Should remove Grandchild (Dead Leaf). Child becomes Leaf.
+    // Prune: Should rebuild the tree with ONLY the alive blocks.
+    // The dead root and dead grandchild should be removed in one pass.
     tree.prune();
+
     assert_eq!(
         tree.arena.nodes.len(),
-        2,
-        "Pass 1: Should remove grandchild"
+        1,
+        "Pruning should remove dead blocks instantly, keeping only the 1 alive block"
     );
 
-    // Prune 2: Should remove Child (Now Dead Leaf). Root becomes Leaf.
-    tree.prune();
-    assert_eq!(tree.arena.nodes.len(), 1, "Pass 2: Should remove child");
-
-    // Prune 3: Should remove Root (Now Dead Leaf). Tree empty.
-    tree.prune();
-    assert_eq!(tree.arena.nodes.len(), 0, "Pass 3: Should remove root");
-    assert!(tree.root.is_none());
+    // The remaining node should have the coordinates of the survivor (10, 10)
+    assert_eq!(tree.arena.nodes[0].bx, 10);
+    assert_eq!(tree.arena.nodes[0].by, 10);
 }

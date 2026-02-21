@@ -4,7 +4,7 @@ use rustylife_core::{BinaryPacket, SimulationPresenter};
 pub struct AppState {
     pub viewport_cells: Vec<((i128, i128), u8)>,
     pub generation: u64,
-    pub total_cells: u64,
+    pub population: u64,
     pub is_running: bool,
     pub target_viewport: Option<((i128, i128), (i128, i128))>,
     pub gps: f64,
@@ -21,7 +21,7 @@ impl Default for AppState {
         Self {
             viewport_cells: Vec::new(),
             generation: 0,
-            total_cells: 0,
+            population: 0,
             is_running: false,
             target_viewport: None,
             gps: 0.0,
@@ -58,7 +58,7 @@ impl SimulationPresenter for AppState {
             self.viewport_cells = packet.cells().collect();
         }
         self.generation = packet.generation;
-        self.total_cells = telemetry.total_cells;
+        self.population = telemetry.population;
         self.is_running = telemetry.is_running;
         self.gps = telemetry.gps;
         self.work_rate = telemetry.work_rate;

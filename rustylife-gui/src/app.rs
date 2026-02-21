@@ -96,7 +96,7 @@ impl eframe::App for RustyLifeApp {
         let (
             cells,
             generation,
-            total_cells,
+            population,
             gps,
             work_rate,
             net_rate,
@@ -110,7 +110,7 @@ impl eframe::App for RustyLifeApp {
             (
                 s.viewport_cells.clone(),
                 s.generation,
-                s.total_cells,
+                s.population,
                 s.gps,
                 s.work_rate,
                 s.net_rate,
@@ -305,7 +305,7 @@ impl eframe::App for RustyLifeApp {
                                             .color(ui.visuals().weak_text_color()),
                                     );
                                     ui.label(
-                                        egui::RichText::new(fmt_num(total_cells as i64, 0, false))
+                                        egui::RichText::new(fmt_num(population as i64, 0, false))
                                             .size(16.0)
                                             .strong()
                                             .monospace(),

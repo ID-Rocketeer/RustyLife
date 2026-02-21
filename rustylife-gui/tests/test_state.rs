@@ -9,7 +9,7 @@ fn test_app_state_update() {
     // Instead, let's verify Default state.
 
     assert_eq!(state.generation, 0);
-    assert_eq!(state.total_cells, 0);
+    assert_eq!(state.population, 0);
     assert!(!state.is_running);
     assert_eq!(state.viewport_cells.len(), 0);
 

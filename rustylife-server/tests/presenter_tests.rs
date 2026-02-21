@@ -40,7 +40,7 @@ impl EngineSubscriber for PresenterSubscriber {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
             let telemetry = Telemetry {
-                total_cells: 0, // Mock for test
+                population: 0, // Mock for test
                 is_running,
                 gps,
                 work_rate,
