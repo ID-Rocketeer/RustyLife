@@ -15,6 +15,7 @@ impl EngineSubscriber for IntegritySubscriber {
         &self,
         generation: u64,
         data: Arc<Vec<u8>>,
+        _is_running: bool,
         _gps: f64,
         _work_rate: f64,
         _net_rate: f64,
@@ -22,15 +23,14 @@ impl EngineSubscriber for IntegritySubscriber {
     ) -> bool {
         match rustylife_core::decode_binary_packet(&data) {
             Ok(packet) => {
-                let reported_count = packet.total_cells;
-                // Only count states >= 2 (Alive/born). States 0 and 1 are dead/dying shadows.
-                let actual_living_count =
-                    packet.cells().filter(|(_, state)| *state >= 2).count() as u64;
+                let reported_count = packet.record_count;
+                // Verify that the record_count in the header matches the actual number of cells in the payload.
+                let actual_count = packet.cells().count() as u64;
 
-                if reported_count != actual_living_count {
+                if reported_count != actual_count {
                     eprintln!(
-                        "\n!!! INTEGRITY FAILURE at Gen {}: Header says {}, Payload has {} (Living) !!!\n",
-                        generation, reported_count, actual_living_count
+                        "\n!!! INTEGRITY FAILURE at Gen {}: Header says {} records, Payload has {} !!!\n",
+                        generation, reported_count, actual_count
                     );
                     self.failure_detected.store(true, Ordering::SeqCst);
                     return false; // Stop receiving updates

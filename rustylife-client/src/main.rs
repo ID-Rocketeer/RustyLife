@@ -95,12 +95,8 @@ async fn main() -> anyhow::Result<()> {
                 let mut latest_generation = 0;
 
                 // Cache telemetry/bounds from SnapshotAvailable, apply when BinaryStateHeader arrives
-                let mut cached_telemetry: Option<(
-                    f64,
-                    f64,
-                    f64,
-                    Option<((i128, i128), (i128, i128))>,
-                )> = None;
+                // Telemetry Ring Buffer (Zero Allocation)
+                let mut telemetry_cache: [Option<rustylife_core::Telemetry>; 256] = [None; 256];
 
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
@@ -126,18 +122,15 @@ async fn main() -> anyhow::Result<()> {
                                         s.cores = cores;
                                         s.patterns = patterns;
                                     }
-                                    rustylife_core::Response::SnapshotAvailable { generation, gps, work_rate, net_rate, bounds } => {
+                                    rustylife_core::Response::SnapshotAvailable { generation, telemetry } => {
                                         latest_generation = generation;
 
-                                        // Update bounds in state for UI display
-                                        {
-                                            let mut s = state_clone.lock().unwrap();
-                                            s.update_bounds(bounds);
-                                            // Also update telemetry from SnapshotAvailable for real-time display
-                                            s.gps = gps;
-                                            s.work_rate = work_rate;
-                                            s.net_rate = net_rate;
-                                        }
+                                        // Store in ring buffer for later atomic update with cells
+                                        telemetry_cache[(generation % 256) as usize] = Some(telemetry);
+
+                                        // We can still update bounds immediately if we want "predicted" bounds,
+                                        // or wait for the sync. User specified atomic update.
+                                        // But we should at least track the latest gen for requests.
 
                                         if !pending_request {
                                             // Send Request for data
@@ -161,15 +154,15 @@ async fn main() -> anyhow::Result<()> {
 
                                         if let Ok(packet) = rustylife_core::decode_binary_packet(&full_packet) {
                                             let mut s = state_clone.lock().unwrap();
-                                            // SimulationPresenter trait is implemented for AppState in rustylife-gui
-                                            s.update_state(packet);
 
-                                            // Apply cached telemetry/bounds from SnapshotAvailable
-                                            if let Some((gps, work_rate, net_rate, bounds)) = cached_telemetry.take() {
-                                                s.gps = gps;
-                                                s.work_rate = work_rate;
-                                                s.net_rate = net_rate;
-                                                s.update_bounds(bounds);
+                                            // Synchronize with cached telemetry
+                                            let idx = (packet.generation % 256) as usize;
+                                            if let Some(telemetry) = telemetry_cache[idx].take() {
+                                                s.update_state(packet, telemetry);
+                                            } else {
+                                                // Fallback if telemetry announcement was missed/dropped
+                                                // (Shouldn't happen on reliable TCP, but for robustness)
+                                                println!("Warning: No cached telemetry for Gen {}", packet.generation);
                                             }
                                         }
 

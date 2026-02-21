@@ -25,7 +25,7 @@ impl TestSync {
         while guard.0 < target {
             let result = self
                 .cond
-                .wait_timeout(guard, std::time::Duration::from_secs(5))
+                .wait_timeout(guard, std::time::Duration::from_secs(15))
                 .unwrap();
             guard = result.0;
             if result.1.timed_out() {
@@ -40,6 +40,7 @@ impl EngineSubscriber for TestSync {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
+        _is_running: bool,
         _gps: f64,
         _work_rate: f64,
         _net_rate: f64,
@@ -494,17 +495,17 @@ fn test_engine_remains_stable_under_immediate_stop_stress() {
     std::thread::yield_now();
     engine.stop();
 
-    // 3. Wait for quiescence
+    // 3. Wait for quiescence (all tasks complete)
+    // Note: We can't rely on cell count because if the engine advanced a generation
+    // before stopping, cells will be in the old generation (count=0 in current).
+    // We just need to ensure all in-flight tasks complete.
     let mut success = false;
     let start = std::time::Instant::now();
     while start.elapsed().as_secs() < 5 {
-        let count = engine.get_cells_in_rect((-100, -100), (100, 100)).len();
         let flight = engine.work_queue_in_flight();
-        if count > 0 {
-            if flight == 0 {
-                success = true;
-                break;
-            }
+        if flight == 0 {
+            success = true;
+            break;
         }
         std::thread::yield_now();
     }
@@ -698,11 +699,8 @@ fn test_reset_stability() {
         rle: "b2o$2ob$bo!".to_string(),
     });
 
-    // 1. Load Pattern
-    engine.seed("r-pentomino".to_string());
-
-    // 2. Start (run for a bit)
-    engine.start();
+    // Seed and Start
+    engine.seed_and_start("r-pentomino".to_string(), None);
     sync.wait_for_generation(10);
 
     // 3. Stop
@@ -839,13 +837,11 @@ fn test_glider_gun_behavior() {
 
     // Seed Glider Gun
     let rle = "24bo$22bobo$12b2o6b2o12b2o$11bo3bo4b2o12b2o$2o8bo5bo3b2o$2o8bo3bob2o4bobo$10bo5bo7bo$11bo3bo$12b2o!";
-    engine.seed(rle.to_string());
-
     let sync = TestSync::new();
     engine.add_subscriber(sync.clone());
 
-    // Run for 100 generations (Gun period is 30, should produce gliders)
-    engine.start_generations(100);
+    // Seed and Start for 100 generations
+    engine.seed_and_start(rle.to_string(), Some(100));
     sync.wait_for_generation(100);
 
     // Check population

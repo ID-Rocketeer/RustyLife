@@ -39,10 +39,14 @@ async fn mock_server_ipc(stream: TcpStream, engine: Arc<SimulationEngine>) {
                     // Ack with SnapshotAvailable for test
                     let resp = Response::SnapshotAvailable {
                         generation,
-                        gps: 0.0,
-                        work_rate: 0.0,
-                        net_rate: 0.0,
-                        bounds: None,
+                        telemetry: rustylife_core::Telemetry {
+                            total_cells: 0,
+                            is_running: true,
+                            gps: 0.0,
+                            work_rate: 0.0,
+                            net_rate: 0.0,
+                            bounds: None,
+                        },
                     };
                     let _ = writer.write_all(&resp.to_bytes()).await;
                 }

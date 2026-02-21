@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use crate::utils::{fmt_coord, fmt_num, format_si};
 use crate::UserActionHandler;
-use eframe::egui;
+use egui::{Color32, Vec2};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
@@ -129,142 +129,194 @@ impl eframe::App for RustyLifeApp {
         self.last_generation = generation;
         self.last_update_time = Some(Instant::now());
 
-        // ... Header ...
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            // ... (rest of header unchanged, relying on context matching to skip)
-            ui.horizontal(|ui| {
-                // Ombre Title: "RustyLife"
-                ui.horizontal(|ui| {
-                    ui.style_mut().spacing.item_spacing.x = 0.0;
-                    let text = "RustyLife";
-                    let start = crate::style::COLOR_TITLE_START;
-                    let end = crate::style::COLOR_TITLE_END;
-                    let len = text.len() as f32;
+        // --- Header ---
+        egui::TopBottomPanel::top("header")
+            .min_height(48.0)
+            .show(ctx, |ui| {
+                ui.columns(3, |columns| {
+                    // --- COLUMN 1: LEFT (Title & Generation) ---
+                    columns[0].vertical(|ui| {
+                        ui.set_height(48.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.style_mut().spacing.item_spacing.x = 0.0;
+                                let text = "RustyLife";
+                                let start = crate::style::COLOR_TITLE_START;
+                                let end = crate::style::COLOR_TITLE_END;
+                                for (i, c) in text.chars().enumerate() {
+                                    let t = i as f32 / (text.len() as f32 - 1.0);
+                                    let r = (start.r() as f32
+                                        + (end.r() as f32 - start.r() as f32) * t)
+                                        as u8;
+                                    let g = (start.g() as f32
+                                        + (end.g() as f32 - start.g() as f32) * t)
+                                        as u8;
+                                    let b = (start.b() as f32
+                                        + (end.b() as f32 - start.b() as f32) * t)
+                                        as u8;
+                                    ui.label(
+                                        egui::RichText::new(c.to_string())
+                                            .size(22.0)
+                                            .strong()
+                                            .color(egui::Color32::from_rgb(r, g, b)),
+                                    );
+                                }
+                            });
+                            ui.label(
+                                egui::RichText::new(format!("Gen: {}", generation))
+                                    .size(13.0)
+                                    .strong()
+                                    .monospace()
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        });
+                    });
 
-                    for (i, c) in text.chars().enumerate() {
-                        let t = i as f32 / (len - 1.0);
-                        let r = (start.r() as f32 + (end.r() as f32 - start.r() as f32) * t) as u8;
-                        let g = (start.g() as f32 + (end.g() as f32 - start.g() as f32) * t) as u8;
-                        let b = (start.b() as f32 + (end.b() as f32 - start.b() as f32) * t) as u8;
-                        let color = egui::Color32::from_rgb(r, g, b);
+                    // --- COLUMN 2: CENTER (Simulation Controls) ---
+                    columns[1].vertical_centered(|ui| {
+                        ui.set_height(48.0);
+                        ui.add_space(7.0);
+                        ui.horizontal_centered(|ui| {
+                            let btn_h = 34.0;
+                            ui.spacing_mut().item_spacing.x = 8.0;
 
-                        ui.label(
-                            egui::RichText::new(c.to_string())
-                                .size(24.0) // Slightly larger for emphasis
-                                .strong()
-                                .color(color),
-                        );
-                    }
-                });
-
-                ui.add_space(10.0);
-                ui.label(egui::RichText::new(format!("Gen: {}", generation)).size(18.0));
-
-                // Control Logic State
-                let run_enabled = !is_running;
-                let stop_enabled = is_running;
-                let step_enabled = !is_running;
-                let reset_enabled = !is_running;
-
-                ui.separator();
-
-                if ui
-                    .add_enabled(run_enabled, egui::Button::new("Start"))
-                    .clicked()
-                {
-                    self.handler.start();
-                }
-                if ui
-                    .add_enabled(stop_enabled, egui::Button::new("Stop"))
-                    .clicked()
-                {
-                    self.handler.stop();
-                }
-                if ui
-                    .add_enabled(step_enabled, egui::Button::new("Step"))
-                    .clicked()
-                {
-                    self.handler.step();
-                }
-
-                if ui
-                    .add_enabled(reset_enabled, egui::Button::new("Reset"))
-                    .clicked()
-                {
-                    self.handler.reset();
-                }
-                if ui.button("Origin").clicked() {
-                    self.view_offset = egui::Vec2::ZERO;
-                }
-
-                ui.menu_button("Patterns", |ui| {
-                    let patterns = {
-                        let s = self.state.lock().unwrap();
-                        s.patterns.clone()
-                    };
-
-                    if patterns.is_empty() {
-                        ui.label("No patterns available");
-                    } else {
-                        for p in patterns {
+                            // Media Controls (Consistently bright)
+                            let play_icon = if is_running { "⏸" } else { "▶" };
                             if ui
-                                .button(p.name.clone())
-                                .on_hover_text(p.description)
+                                .add(
+                                    MediaButton::new(play_icon, true, Color32::WHITE)
+                                        .with_size(Vec2::new(34.0, btn_h)),
+                                )
+                                .on_hover_text("Play / Pause")
                                 .clicked()
                             {
-                                self.handler.seed(p.name);
-                                ui.close_menu();
+                                if is_running {
+                                    self.handler.stop();
+                                } else {
+                                    self.handler.start();
+                                }
                             }
-                        }
-                    }
+
+                            if ui
+                                .add_enabled(
+                                    !is_running,
+                                    MediaButton::new("⏯", true, Color32::WHITE)
+                                        .with_size(Vec2::new(34.0, btn_h)),
+                                )
+                                .on_hover_text("Step Generation")
+                                .clicked()
+                            {
+                                self.handler.step();
+                            }
+
+                            if ui
+                                .add_enabled(
+                                    !is_running,
+                                    MediaButton::new("⏮", true, Color32::WHITE)
+                                        .with_size(Vec2::new(34.0, btn_h)),
+                                )
+                                .on_hover_text("Reset Simulation")
+                                .clicked()
+                            {
+                                self.handler.reset();
+                            }
+
+                            ui.add_space(4.0);
+
+                            // Navigation Controls
+                            let nav_style = |text: &str| {
+                                egui::Button::new(egui::RichText::new(text).size(15.0).strong())
+                                    .min_size(Vec2::new(0.0, btn_h))
+                            };
+
+                            if ui.add_sized([54.0, btn_h], nav_style("Origin")).clicked() {
+                                self.view_offset = Vec2::ZERO;
+                            }
+
+                            ui.menu_button(
+                                egui::RichText::new("Patterns").size(15.0).strong(),
+                                |ui| {
+                                    ui.set_min_width(120.0);
+                                    let patterns = self.state.lock().unwrap().patterns.clone();
+                                    for p in patterns {
+                                        if ui
+                                            .button(p.name.clone())
+                                            .on_hover_text(p.description)
+                                            .clicked()
+                                        {
+                                            self.handler.seed(p.name);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                },
+                            )
+                            .response
+                            .on_hover_text("Load a pattern");
+
+                            if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
+                                let old = self.cell_size;
+                                self.cell_size = (self.cell_size + 1.0).min(32.0);
+                                self.view_offset *= self.cell_size / old;
+                            }
+                            if ui.add_sized([40.0, btn_h], nav_style("-")).clicked() {
+                                let old = self.cell_size;
+                                self.cell_size = (self.cell_size - 1.0).max(1.0);
+                                self.view_offset *= self.cell_size / old;
+                            }
+                        });
+                    });
+
+                    // --- COLUMN 3: RIGHT (Metrics & Exit) ---
+                    columns[2].with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.set_height(48.0);
+                            ui.add_space(10.0);
+
+                            // Quit Button
+                            if ui
+                                .add_sized(
+                                    [64.0, 34.0],
+                                    egui::Button::new(
+                                        egui::RichText::new("Quit")
+                                            .size(15.0)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(180, 0, 0)),
+                                )
+                                .clicked()
+                            {
+                                self.handler.shutdown();
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+
+                            ui.add_space(15.0);
+
+                            // Population Stats
+                            ui.vertical(|ui| {
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    ui.label(
+                                        egui::RichText::new("Population")
+                                            .size(10.0)
+                                            .strong()
+                                            .color(ui.visuals().weak_text_color()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(fmt_num(total_cells as i64, 0, false))
+                                            .size(16.0)
+                                            .strong()
+                                            .monospace(),
+                                    );
+                                });
+                            });
+                        },
+                    );
                 });
-
-                ui.separator();
-                if ui.button("In").clicked() || ui.input(|i| i.key_pressed(egui::Key::Plus)) {
-                    let old_size = self.cell_size;
-                    let new_size = (self.cell_size + 1.0).min(32.0);
-                    if new_size != old_size {
-                        let factor = new_size / old_size;
-                        self.view_offset *= factor;
-                        self.cell_size = new_size;
-                    }
-                }
-                if ui.button("Out").clicked() || ui.input(|i| i.key_pressed(egui::Key::Minus)) {
-                    let old_size = self.cell_size;
-                    let new_size = (self.cell_size - 1.0).max(1.0);
-                    if new_size != old_size {
-                        let factor = new_size / old_size;
-                        self.view_offset *= factor;
-                        self.cell_size = new_size;
-                    }
-                }
-
-                ui.separator();
-                ui.label("Population:");
-                ui.label(
-                    egui::RichText::new(total_cells.to_string()).color(crate::style::COLOR_TEXT),
-                );
-
-                ui.separator();
-                if ui
-                    .add(egui::Button::new("Quit").fill(egui::Color32::from_rgb(153, 27, 27)))
-                    .on_hover_text("Shutdown")
-                    .clicked()
-                {
-                    self.handler.shutdown();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
+                ui.add_space(4.0);
             });
-        });
-
-        // ... (Header body omitted for brevity, logic handles matching) ...
-        // Actually replace_file_content needs exact matches.
-        // I should target the block I want to change.
-        // I will split this into two replacements if possible, or just one large one if context allows.
-        // The first modification is the destructuring block.
-        // The second modification is the footer content.
-
-        // Let's do destructuring first.
 
         // Footer
         egui::TopBottomPanel::bottom("footer")
@@ -634,5 +686,164 @@ impl eframe::App for RustyLifeApp {
         });
 
         ctx.request_repaint();
+    }
+}
+
+struct MediaButton {
+    icon: String,
+    enabled: bool,
+    color: Color32,
+    size: Option<Vec2>,
+}
+
+impl MediaButton {
+    pub fn new(icon: impl Into<String>, enabled: bool, color: Color32) -> Self {
+        Self {
+            icon: icon.into(),
+            enabled,
+            color,
+            size: None,
+        }
+    }
+
+    pub fn with_size(mut self, size: Vec2) -> Self {
+        self.size = Some(size);
+        self
+    }
+}
+
+impl egui::Widget for MediaButton {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let desired_size = self.size.unwrap_or(Vec2::splat(18.0));
+        let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+
+        if ui.is_rect_visible(rect) {
+            let visuals = ui.style().interact(&response);
+            let painter = ui.painter();
+
+            // Always draw background frame to match standard buttons
+            painter.rect_filled(
+                rect.expand(visuals.expansion),
+                visuals.rounding,
+                visuals.bg_fill,
+            );
+            if response.hovered() || response.clicked() {
+                painter.rect_stroke(
+                    rect.expand(visuals.expansion),
+                    visuals.rounding,
+                    visuals.fg_stroke,
+                );
+            }
+
+            let paint_rect = rect.shrink(8.0); // Balanced padding
+            let icon_color = if self.enabled {
+                self.color
+            } else {
+                ui.visuals().extreme_bg_color
+            };
+
+            use egui::{Rect, Shape, Stroke};
+            match self.icon.as_str() {
+                "⏸" => {
+                    let w = paint_rect.width();
+                    let h = paint_rect.height();
+                    let bar_w = w * 0.35;
+                    let gap = w * 0.3;
+                    painter.rect_filled(
+                        Rect::from_min_size(paint_rect.min, Vec2::new(bar_w, h)),
+                        0.0,
+                        icon_color,
+                    );
+                    painter.rect_filled(
+                        Rect::from_min_size(
+                            paint_rect.min + Vec2::new(bar_w + gap, 0.0),
+                            Vec2::new(bar_w, h),
+                        ),
+                        0.0,
+                        icon_color,
+                    );
+                }
+                "⏯" => {
+                    let w = paint_rect.width();
+                    let h = paint_rect.height();
+                    let tri_w = w * 0.55;
+                    let bar_w = w * 0.15;
+                    let gap = w * 0.15;
+
+                    painter.add(Shape::convex_polygon(
+                        vec![
+                            paint_rect.min,
+                            paint_rect.min + Vec2::new(tri_w, h / 2.0),
+                            paint_rect.min + Vec2::new(0.0, h),
+                        ],
+                        icon_color,
+                        Stroke::NONE,
+                    ));
+
+                    let bar_start = tri_w + gap;
+                    painter.rect_filled(
+                        Rect::from_min_size(
+                            paint_rect.min + Vec2::new(bar_start, 0.0),
+                            Vec2::new(bar_w, h),
+                        ),
+                        0.0,
+                        icon_color,
+                    );
+                    painter.rect_filled(
+                        Rect::from_min_size(
+                            paint_rect.min + Vec2::new(bar_start + bar_w + gap, 0.0),
+                            Vec2::new(bar_w, h),
+                        ),
+                        0.0,
+                        icon_color,
+                    );
+                }
+                "⏮" => {
+                    let w = paint_rect.width();
+                    let h = paint_rect.height();
+                    let bar_w = w * 0.15;
+                    let tri_w = w * 0.4;
+                    let gap = w * 0.1;
+
+                    painter.rect_filled(
+                        Rect::from_min_size(paint_rect.min, Vec2::new(bar_w, h)),
+                        0.0,
+                        icon_color,
+                    );
+
+                    let tri1_start = bar_w + gap;
+                    painter.add(Shape::convex_polygon(
+                        vec![
+                            paint_rect.min + Vec2::new(tri1_start, h / 2.0),
+                            paint_rect.min + Vec2::new(tri1_start + tri_w, 0.0),
+                            paint_rect.min + Vec2::new(tri1_start + tri_w, h),
+                        ],
+                        icon_color,
+                        Stroke::NONE,
+                    ));
+
+                    let tri2_start = tri1_start + tri_w + gap;
+                    painter.add(Shape::convex_polygon(
+                        vec![
+                            paint_rect.min + Vec2::new(tri2_start, h / 2.0),
+                            paint_rect.min + Vec2::new(tri2_start + tri_w, 0.0),
+                            paint_rect.min + Vec2::new(tri2_start + tri_w, h),
+                        ],
+                        icon_color,
+                        Stroke::NONE,
+                    ));
+                }
+                _ => {
+                    painter.text(
+                        paint_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &self.icon,
+                        egui::FontId::proportional(14.0),
+                        icon_color,
+                    );
+                }
+            }
+        }
+        response
     }
 }

@@ -288,36 +288,25 @@ impl BlockTree {
         let mut found = false;
 
         for node in &self.arena.nodes {
-            if node.block.boards[mask_idx] == 0 {
-                continue;
-            }
+            if let Some(((bx1, by1), (bx2, by2))) = node.block.exact_bounds_in_state(mask_idx) {
+                let world_x1 = (node.bx << 3) + bx1;
+                let world_y1 = (node.by << 3) + by1;
+                let world_x2 = (node.bx << 3) + bx2;
+                let world_y2 = (node.by << 3) + by2;
 
-            // Improve precision by checking bits
-            let base_x = node.bx << 3;
-            let base_y = node.by << 3;
-            let board = node.block.boards[mask_idx];
-
-            for i in 0..64 {
-                if (board & (1 << i)) != 0 {
-                    let lx = (i % 8) as i128;
-                    let ly = (i / 8) as i128;
-                    let x = base_x + lx;
-                    let y = base_y + ly;
-
-                    if x < min_x {
-                        min_x = x;
-                    }
-                    if x > max_x {
-                        max_x = x;
-                    }
-                    if y < min_y {
-                        min_y = y;
-                    }
-                    if y > max_y {
-                        max_y = y;
-                    }
-                    found = true;
+                if world_x1 < min_x {
+                    min_x = world_x1;
                 }
+                if world_x2 > max_x {
+                    max_x = world_x2;
+                }
+                if world_y1 < min_y {
+                    min_y = world_y1;
+                }
+                if world_y2 > max_y {
+                    max_y = world_y2;
+                }
+                found = true;
             }
         }
 

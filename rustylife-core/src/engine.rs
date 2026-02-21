@@ -24,9 +24,9 @@ impl SnapshotStore {
             lock.insert(generation, data);
 
             // Prune old snapshots to prevent unbounded memory growth
-            // Keep last 200 generations (adjust as needed for UI lag tolerance)
-            if generation > 200 {
-                lock.remove(&(generation - 200));
+            // Keep last 1000 generations (increased from 200 to handle fast-running engines)
+            if generation > 1000 {
+                lock.remove(&(generation - 1000));
             }
         }
     }
@@ -89,6 +89,7 @@ pub trait EngineSubscriber: Send + Sync {
         &self,
         generation: u64,
         data: Arc<Vec<u8>>,
+        is_running: bool,
         gps: f64,
         work_rate: f64,
         net_rate: f64,
@@ -238,6 +239,7 @@ pub struct Engine {
     pub epoch: AtomicU64,
     pub telemetry: Mutex<Telemetry>,
     pub current_generation_bounds: Mutex<Option<((i128, i128), (i128, i128))>>,
+    pub transition_lock: Mutex<()>,
 
     // Synchronization for phases
     pub phase_counter: AtomicUsize,
@@ -308,6 +310,7 @@ impl Engine {
             patterns: Mutex::new(Vec::new()),
             active_pattern: Mutex::new(None),
             current_generation_bounds: Mutex::new(None),
+            transition_lock: Mutex::new(()),
         });
 
         for i in 0..pool_size {
@@ -324,7 +327,7 @@ impl Engine {
         self.subscribers.lock().unwrap().push(subscriber);
     }
 
-    pub fn notify_subscribers(&self, generation: u64, packet: Arc<Vec<u8>>) {
+    pub fn notify_subscribers(&self, generation: u64, packet: Arc<Vec<u8>>, is_running: bool) {
         let (gps, work, net) = {
             let t = self.telemetry.lock().unwrap();
             (t.gps, t.work_rate_ema, t.net_rate_ema)
@@ -333,18 +336,35 @@ impl Engine {
 
         let mut subscribers = self.subscribers.lock().unwrap();
         subscribers.retain(|sub| {
-            sub.on_snapshot_available(generation, packet.clone(), gps, work, net, bounds)
+            sub.on_snapshot_available(
+                generation,
+                packet.clone(),
+                is_running,
+                gps,
+                work,
+                net,
+                bounds,
+            )
         });
     }
 
     // Legacy methods usually expected by main.rs / tests
     pub fn start(&self) {
-        self.work_queue.enqueue(Tasks::Start);
+        if self.stopping.load(Ordering::SeqCst) {
+            self.work_queue.enqueue(Tasks::Start);
+        }
     }
     pub fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         self.work_queue.enqueue(Tasks::Stop);
     }
     pub fn step(&self) {
+        // Guard: Drop Step commands if engine is running
+        // This prevents GUIs from corrupting the simulation by sending Step while running
+        if !self.stopping.load(Ordering::SeqCst) {
+            // Engine is running - ignore Step command
+            return;
+        }
         self.work_queue.enqueue(Tasks::Step);
     }
     pub fn reset(&self) {
@@ -365,11 +385,9 @@ impl Engine {
     }
 
     pub fn seed_and_start(&self, pattern: String, generations: Option<u64>) {
-        self.seed(pattern);
-        if let Some(target) = generations {
-            self.set_target_generation(target);
-        }
-        self.start();
+        let target = generations.unwrap_or(u64::MAX);
+        self.work_queue
+            .enqueue(Tasks::SeedAndStart(pattern, target));
     }
 
     pub fn register_pattern(&self, pattern: crate::PatternInfo) {
@@ -488,7 +506,7 @@ impl Engine {
                 // Initial bounds for Gen 0
                 *engine.current_generation_bounds.lock().unwrap() = engine.space.bounds();
 
-                Self::capture_state(engine);
+                Self::capture_state(engine, false);
             }
             Tasks::Stop => {
                 engine.stopping.store(true, Ordering::SeqCst);
@@ -516,7 +534,7 @@ impl Engine {
                 // Initial bounds for Gen 0
                 *engine.current_generation_bounds.lock().unwrap() = engine.space.bounds();
 
-                Self::capture_state(engine);
+                Self::capture_state(engine, false);
             }
             Tasks::SeedAndStart(pattern_input, generation) => {
                 engine.space.clear();
@@ -542,7 +560,7 @@ impl Engine {
                 // Initial bounds for Gen 0
                 *engine.current_generation_bounds.lock().unwrap() = engine.space.bounds();
 
-                Self::capture_state(engine);
+                Self::capture_state(engine, true);
                 // Trigger start task to actually begin processing loop
                 engine.work_queue.enqueue(Tasks::Start);
             }
@@ -550,6 +568,7 @@ impl Engine {
     }
 
     fn handle_transition(engine: &Arc<Self>, task: &Tasks) {
+        let _guard = engine.transition_lock.lock().unwrap();
         match task {
             Tasks::Start | Tasks::StartGenerations(_) | Tasks::Step => {
                 engine.space.advance_generation();
@@ -810,55 +829,44 @@ impl Engine {
                 .write()
                 .unwrap_or_else(|e| e.into_inner());
 
-            let mut neighbor_map: HashMap<(i128, i128), Neighbors> = HashMap::new();
+            let mut node_neighbors = Vec::with_capacity(bucket.arena.nodes.len());
+            node_neighbors.resize(bucket.arena.nodes.len(), Neighbors::default());
+
+            let mut current_pos = (i128::MIN, i128::MIN);
+            let mut msg_target_idx: Option<usize> = None;
 
             for msg in &buffer.incoming {
-                bucket.ensure_block(msg.x, msg.y);
+                if (msg.x, msg.y) != current_pos {
+                    current_pos = (msg.x, msg.y);
+                    let idx = bucket.ensure_block(msg.x, msg.y) as usize;
+                    if idx >= node_neighbors.len() {
+                        node_neighbors.resize(idx + 1, Neighbors::default());
+                    }
+                    msg_target_idx = Some(idx);
+                }
 
-                let entry = neighbor_map.entry((msg.x, msg.y)).or_default();
-                match msg.mask {
-                    0 => entry.n |= msg.payload, // Msg from North (Sender's South)
-                    1 => entry.s |= msg.payload, // Msg from South (Sender's North)
-                    // In Block8x8::step, bit shift logic:
-                    // e = ((center & COL_7) << 1) | e_mask. 'e' is West Neighbor.
-                    // w = ((center & COL_0) >> 1) | w_mask. 'w' is East Neighbor.
-                    // So we map:
-                    // Mask 2 (From West / Sender's East shifted to Col 0) -> w_mask (West Neighbor Data)
-                    2 => entry.w |= msg.payload,
-                    // Mask 3 (From East / Sender's West shifted to Col 7) -> e_mask (East Neighbor Data)
-                    3 => entry.e |= msg.payload,
-
-                    // Optimization: Corners can be folded into N/S?
-                    // Block8x8::step doesn't take corner args. It derives them.
-                    // BUT, derived corners need valid N/S/E/W data.
-                    // AND they assume corners are consistent with N/S/E/W overlaps.
-                    // Our N/S payloads are pure rows. They do NOT include corners (if bits 0/7 are not carrying over).
-                    // Actually, if we passed n_mask, s_mask, e_mask, w_mask, `step` derives corners:
-                    // let ne = ((n & COL_7) << 1) | (e_mask << 8);
-                    // If I have NE corner data from a corner message, where do I put it?
-                    // `step` logic assumes full-strip edges.
-                    // If we have isolated corner bits, `step` might miss them if we don't merge them into N/S/E/W.
-
-                    // E.g. NE needs to be in `e_mask << 8`? No, that's deriving from e_mask.
-                    // Or `n & COL_7`.
-                    // Effectively, if we have a bit for the NE position, we should OR it into `n_mask` or `e_mask`?
-                    // `n_mask` is the North Row.
-                    // NE corner is at North Row, Col 7.
-                    // So OR it into `entry.n`.
-                    // Mask 4 (From NW) -> nw field
-                    4 => entry.nw |= msg.payload, // NW from SE
-                    5 => entry.ne |= msg.payload, // NE from SW
-                    6 => entry.sw |= msg.payload, // SW from NE
-                    7 => entry.se |= msg.payload, // SE from NW
-                    _ => {}
+                if let Some(idx) = msg_target_idx {
+                    let entry = &mut node_neighbors[idx];
+                    match msg.mask {
+                        0 => entry.n |= msg.payload,
+                        1 => entry.s |= msg.payload,
+                        2 => entry.w |= msg.payload,
+                        3 => entry.e |= msg.payload,
+                        4 => entry.nw |= msg.payload,
+                        5 => entry.ne |= msg.payload,
+                        6 => entry.sw |= msg.payload,
+                        7 => entry.se |= msg.payload,
+                        _ => {}
+                    }
                 }
             }
 
-            for node in &mut bucket.arena.nodes {
-                let neighbors = neighbor_map
-                    .get(&(node.bx, node.by))
-                    .copied()
-                    .unwrap_or_default();
+            for (idx, node) in bucket.arena.nodes.iter_mut().enumerate() {
+                let neighbors = if idx < node_neighbors.len() {
+                    node_neighbors[idx]
+                } else {
+                    Neighbors::default()
+                };
 
                 // Correctly pass corner data and Capture Metrics
                 let (_pop, born, died, work, is_dead) = node.block.step(
@@ -932,21 +940,22 @@ impl Engine {
         if prev == 1 {
             // Generation is complete
             let gen_count = engine.generation.load(Ordering::SeqCst);
-            Self::capture_state(engine);
-
             // Check if we reached target generation
             let target = engine.target_generation.load(Ordering::SeqCst);
             if gen_count >= target {
                 engine.stopping.store(true, Ordering::SeqCst);
             }
 
-            if !engine.stopping.load(Ordering::SeqCst) {
+            let is_running = !engine.stopping.load(Ordering::SeqCst);
+            Self::capture_state(engine, is_running);
+
+            if is_running {
                 engine.work_queue.enqueue(Tasks::Step);
             }
         }
     }
 
-    fn capture_state(engine: &Arc<Self>) {
+    fn capture_state(engine: &Arc<Self>, is_running: bool) {
         let generation = engine.generation.load(Ordering::SeqCst);
 
         // Check for Pruning Trigger
@@ -966,7 +975,6 @@ impl Engine {
         let living_cells = engine.space.collect_all_states();
 
         // Metrics are already updated in commit_bucket phase
-        let pop = engine.living_count.load(Ordering::SeqCst);
         let work = engine.work.load(Ordering::SeqCst); // Accumulator
         let net = engine.net.load(Ordering::SeqCst);
 
@@ -977,30 +985,16 @@ impl Engine {
             .unwrap()
             .update(generation, work, net);
 
-        // Get Telemetry snapshot for packet
-        let (gps, work_rate, net_rate) = {
-            let tel = engine.telemetry.lock().unwrap();
-            (tel.gps, tel.work_rate_ema, tel.net_rate_ema)
-        };
+        // NO-OP: Stripped metrics moved to SnapshotAvailable announcements
 
-        let is_running = !engine.stopping.load(Ordering::SeqCst);
-
-        // Serialize
-        let packet_data = crate::encode_binary_packet(
-            generation,
-            pop,
-            is_running,
-            &living_cells,
-            gps,
-            work_rate,
-            net_rate,
-        );
+        // Serialize (Stripped metrics: strictly in SnapshotAvailable announcements)
+        let packet_data = crate::encode_binary_packet(generation, &living_cells);
         let packet = Arc::new(packet_data);
 
         // Store
         engine.snapshots.insert(generation, packet.clone());
 
         // Notify
-        engine.notify_subscribers(generation, packet);
+        engine.notify_subscribers(generation, packet, is_running);
     }
 }

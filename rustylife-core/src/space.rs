@@ -481,7 +481,10 @@ impl SimulationSpace {
             .lines()
             .filter(|l| {
                 let t = l.trim();
-                !t.starts_with('#') && !t.starts_with('x') && !t.starts_with('X')
+                !t.starts_with('#')
+                    && !t.starts_with('!')
+                    && !t.starts_with('x')
+                    && !t.starts_with('X')
             })
             .collect();
         let data = lines.join("");
@@ -491,7 +494,7 @@ impl SimulationSpace {
         for ch in data.chars() {
             if ch.is_digit(10) {
                 num_str.push(ch);
-            } else if ch == 'b' || ch == 'o' || ch == '$' || ch == '!' {
+            } else if ch == 'b' || ch == 'B' || ch == 'o' || ch == 'O' || ch == '$' || ch == '!' {
                 let count = if num_str.is_empty() {
                     1
                 } else {
@@ -499,7 +502,7 @@ impl SimulationSpace {
                 };
                 num_str.clear();
 
-                match ch {
+                match ch.to_ascii_lowercase() {
                     'b' => x += count,
                     'o' => {
                         for i in 0..count {
@@ -519,9 +522,10 @@ impl SimulationSpace {
                     '!' => return,
                     _ => {}
                 }
+            } else if ch.is_whitespace() || ch == ',' {
+                // Ignore spaces and commas in complex/noisy formats
+                continue;
             } else {
-                // Reset usage count if we hit weird characters, though we filtered headers.
-                // This is just a safety fallback.
                 num_str.clear();
             }
         }

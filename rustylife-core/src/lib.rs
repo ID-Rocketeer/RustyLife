@@ -44,18 +44,26 @@ pub enum Request {
     Shutdown,
 }
 
+/// Shared telemetry metrics for all interfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Telemetry {
+    pub total_cells: u64,
+    pub is_running: bool,
+    pub gps: f64,
+    pub work_rate: f64,
+    pub net_rate: f64,
+    pub bounds: Option<((i128, i128), (i128, i128))>,
+}
+
 /// Represents a response from the simulation server to a client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Response {
     Ok,
-    /// Notification that a new snapshot is available.
+    /// Notification that a new snapshot is available with full telemetry.
     SnapshotAvailable {
         generation: u64,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
-        bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: Telemetry,
     },
     /// A generic error message.
     Error(String),
@@ -66,14 +74,10 @@ pub enum Response {
         patterns: Vec<PatternInfo>,
     },
     /// A header indicates a binary payload follows.
+    /// Redundant metrics stripped to enforce SnapshotAvailable as single source of truth.
     BinaryStateHeader {
         generation: u64,
-        total_cells: u64,
-        is_running: bool,
         record_count: u64,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
     },
 }
 
@@ -126,8 +130,8 @@ impl Response {
 
 /// Abstract interface for components that present or visualize simulation state.
 pub trait SimulationPresenter: Send + Sync {
-    /// Update the presenter with a new simulation packet.
-    fn update_state(&mut self, packet: BinaryPacket<'_>);
+    /// Update the presenter with a new simulation packet and associated telemetry.
+    fn update_state(&mut self, packet: BinaryPacket<'_>, telemetry: Telemetry);
 
     /// Update the presenter with bounds information.
     fn update_bounds(&mut self, _bounds: Option<((i128, i128), (i128, i128))>) {}
@@ -141,23 +145,10 @@ pub trait SimulationPresenter: Send + Sync {
 /// Hybrid protocol packet:
 /// [Header: JSON] + [Payload: Binary]
 /// This function constructs the full byte buffer.
-pub fn encode_binary_packet(
-    generation: u64,
-    total_cells: u64,
-    is_running: bool,
-    cells: &[((i128, i128), u8)],
-    gps: f64,
-    work_rate: f64,
-    net_rate: f64,
-) -> Vec<u8> {
+pub fn encode_binary_packet(generation: u64, cells: &[((i128, i128), u8)]) -> Vec<u8> {
     let header = Response::BinaryStateHeader {
         generation,
-        total_cells,
-        is_running,
         record_count: cells.len() as u64,
-        gps,
-        work_rate,
-        net_rate,
     };
 
     let json = serde_json::to_vec(&header).unwrap();
@@ -197,12 +188,7 @@ pub fn encode_binary_packet(
 #[derive(Debug, PartialEq)]
 pub struct BinaryPacket<'a> {
     pub generation: u64,
-    pub total_cells: u64,
-    pub is_running: bool,
     pub record_count: u64,
-    pub gps: f64,
-    pub work_rate: f64,
-    pub net_rate: f64,
     payload: &'a [u8],
 }
 
@@ -264,12 +250,7 @@ pub fn decode_binary_packet(buf: &[u8]) -> Result<BinaryPacket<'_>, String> {
     match response {
         Response::BinaryStateHeader {
             generation,
-            total_cells,
-            is_running,
             record_count,
-            gps,
-            work_rate,
-            net_rate,
         } => {
             // 2. Verify Binary Payload
             let payload_start = consumed;
@@ -298,12 +279,7 @@ pub fn decode_binary_packet(buf: &[u8]) -> Result<BinaryPacket<'_>, String> {
 
             Ok(BinaryPacket {
                 generation,
-                total_cells,
-                is_running,
                 record_count,
-                gps,
-                work_rate,
-                net_rate,
                 payload,
             })
         }
@@ -317,35 +293,15 @@ mod tests {
 
     #[test]
     fn test_binary_protocol_integrity() {
-        let cells = vec![
-            ((0, 0), 0b11),
-            ((10, -5), 0b10),
-            ((1_000_000_000_000_i128, 9_999_999_999_999_i128), 0b01),
-        ];
+        let cells = vec![((0, 0), 0b11), ((1, 1), 0b10)];
 
-        let generation_count = 42;
-        let total = 1000;
-        let gps = 60.0;
-        let work_rate = 123.45;
-        let net_rate = -45.67;
-        let packet_buf = encode_binary_packet(
-            generation_count,
-            total,
-            true,
-            &cells,
-            gps,
-            work_rate,
-            net_rate,
-        );
+        let generation_count = 101;
+        let packet_buf = encode_binary_packet(generation_count, &cells);
 
         let decoded = decode_binary_packet(&packet_buf).expect("Failed to decode");
 
         assert_eq!(decoded.generation, generation_count);
-        assert_eq!(decoded.total_cells, total);
-        assert_eq!(decoded.record_count, 3);
-        assert!((decoded.gps - gps).abs() < f64::EPSILON);
-        assert!((decoded.work_rate - work_rate).abs() < f64::EPSILON);
-        assert!((decoded.net_rate - net_rate).abs() < f64::EPSILON);
+        assert_eq!(decoded.record_count, 2);
         let decoded_cells: Vec<_> = decoded.cells().collect();
         assert_eq!(decoded_cells, cells);
     }
@@ -353,13 +309,14 @@ mod tests {
     #[test]
     fn test_checksum_failure() {
         let cells = vec![((0, 0), 0b11)];
-        let mut packet_buf = encode_binary_packet(1, 1, false, &cells, 0.0, 0.0, 0.0);
+        let packet_buf = encode_binary_packet(1, &cells);
 
+        let mut corrupted_buf = packet_buf;
         // Corrupt the packet (last byte)
-        let last = packet_buf.len() - 1;
-        packet_buf[last] ^= 0xFF;
+        let last = corrupted_buf.len() - 1;
+        corrupted_buf[last] ^= 0xFF;
 
-        let result = decode_binary_packet(&packet_buf);
+        let result = decode_binary_packet(&corrupted_buf);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Checksum mismatch");
     }

@@ -163,8 +163,8 @@
         .footer-container {
             display: flex;
             flex-direction: column;
-            gap: 2px;
-            /* Reduced from 4px */
+            gap: 1px;
+            /* Reduced from 2px */
             margin-top: 0.25rem;
             /* Add top margin for separation from canvas */
         }
@@ -176,13 +176,15 @@
             font-size: 0.75rem;
             color: #9ca3af;
             background: rgba(0, 0, 0, 0.4);
-            padding: 2px 8px;
-            /* Reduced from 4px 12px */
+            padding: 1px 8px;
+            /* Reduced from 2px 8px */
             border-radius: 4px;
             border: 1px solid rgba(255, 255, 255, 0.05);
             font-weight: 500;
             gap: 1.5rem;
             overflow-x: auto;
+            flex-wrap: nowrap;
+            /* Force internal elements to stay in one row */
             /* Allow footer to scroll if window too narrow */
         }
 
@@ -210,14 +212,14 @@
             color: #10b981;
             /* Laboratory Green */
             background: rgba(0, 0, 0, 0.5);
-            padding: 2px 0;
+            padding: 0px 0;
             border-radius: 2px;
             letter-spacing: -0.02em;
             display: inline-block;
             text-align: left;
             /* Changed from center to left to keep bracket close to label */
             /* padding-left removed for tightness */
-            white-space: pre;
+            white-space: nowrap;
         }
 
         /* Specific widths to keep labels attached to data */
@@ -258,11 +260,11 @@
             </div>
 
             <div class="controls">
-                <button id="run-btn" class="primary" title="Start simulation">Start</button>
-                <button id="stop-btn" title="Pause simulation">Stop</button>
-                <button id="step-btn" title="Single step">Step</button>
-
-                <button id="reset-btn" title="Reset current pattern">Reset</button>
+                <div class="controls-group">
+                    <button id="play-pause-btn" title="Play-Pause" class="primary-btn">⏸</button>
+                    <button id="step-btn" title="Single-Step">⏯</button>
+                    <button id="reset-btn" title="Reset">⏮</button>
+                </div>
                 <button id="origin-btn" title="Return to Origin (0,0)">Origin</button>
                 <select id="pattern-select">
                     <option value="" disabled selected>Select Pattern...</option>
@@ -343,9 +345,7 @@
             </div>
         </div>
     </div>
-    </div>
-
-    <script type="module" src="dashboard.js?v=3"></script>
+    <script type="module" src="dashboard.js?v=4"></script>
 </body>
 
 </html>

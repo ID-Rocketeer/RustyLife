@@ -19,12 +19,12 @@ use axum::{
 };
 use clap::Parser;
 use rustylife_core::{
-    Request, Response, SimulationPresenter,
+    Request, Response, SimulationPresenter, Telemetry,
     engine::{EngineSubscriber, SimulationEngine},
     space::SimulationSpace,
 };
 use rustylife_gui::{AppState, RustyLifeApp, UserActionHandler};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -78,17 +78,27 @@ impl EngineSubscriber for ServerEngineSubscriber {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
+        is_running: bool,
         gps: f64,
         work_rate: f64,
         net_rate: f64,
         bounds: Option<((i128, i128), (i128, i128))>,
     ) -> bool {
-        let resp = Response::SnapshotAvailable {
-            generation,
+        let total_cells = self
+            .engine
+            .living_count
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let telemetry = Telemetry {
+            total_cells,
+            is_running,
             gps,
             work_rate,
             net_rate,
             bounds: to_cartesian_bounds(bounds),
+        };
+        let resp = Response::SnapshotAvailable {
+            generation,
+            telemetry,
         };
         let _ = self.tx.send(resp);
         true
@@ -105,6 +115,7 @@ impl EngineSubscriber for BenchmarkSubscriber {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
+        _is_running: bool,
         _gps: f64,
         _work_rate: f64,
         _net_rate: f64,
@@ -118,9 +129,10 @@ impl EngineSubscriber for BenchmarkSubscriber {
     }
 }
 
-/// A subscriber that drives an abstract presenter using file-based snapshots.
-pub struct PresenterSubscriber {
-    pub presenter: Arc<Mutex<dyn SimulationPresenter>>,
+/// 2. Presenter Subscriber: Forwards simulation updates to a presenter (e.g. Server GUI or IPC)
+struct PresenterSubscriber {
+    presenter: Arc<Mutex<dyn SimulationPresenter>>,
+    engine: Arc<SimulationEngine>, // Added for telemetry context
 }
 
 impl EngineSubscriber for PresenterSubscriber {
@@ -128,19 +140,27 @@ impl EngineSubscriber for PresenterSubscriber {
         &self,
         _generation: u64,
         data: Arc<Vec<u8>>,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
+        is_running: bool,
+        gps: f64,
+        work_rate: f64,
+        net_rate: f64,
         bounds: Option<((i128, i128), (i128, i128))>,
     ) -> bool {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
 
-            // Direct update for bounds not in binary packet
-            // Transform bounds to Cartesian coordinates
-            let cartesian_bounds = to_cartesian_bounds(bounds);
-            presenter.update_state(packet);
-            presenter.update_bounds(cartesian_bounds);
+            // Reconstruct telemetry for internal GUI
+            let total_cells = self.engine.living_count.load(Ordering::Relaxed);
+            let telemetry = Telemetry {
+                total_cells,
+                is_running,
+                gps,
+                work_rate,
+                net_rate,
+                bounds: to_cartesian_bounds(bounds),
+            };
+
+            presenter.update_state(packet, telemetry);
         }
         true
     }
@@ -239,6 +259,7 @@ fn main() {
         let gui_presenter = Arc::clone(&state) as Arc<Mutex<dyn SimulationPresenter>>;
         engine.add_subscriber(Arc::new(PresenterSubscriber {
             presenter: gui_presenter,
+            engine: engine.clone(),
         }));
         Some(state)
     } else {
@@ -283,6 +304,13 @@ fn main() {
             println!("\r\nCtrl-C received. Initiating shutdown...");
             let _ = shutdown_tx_clone.send(());
         }
+    });
+
+    let mut hard_shutdown_rx = shutdown_tx.subscribe();
+    rt.spawn(async move {
+        let _ = hard_shutdown_rx.recv().await;
+        println!("\nShutdown signal received. Forcing process exit.");
+        std::process::exit(0);
     });
 
     // Spawn the server stack in the background
@@ -418,12 +446,18 @@ fn make_snapshot_response(engine: &SimulationEngine) -> Response {
     // Transform bounds to Cartesian coordinates
     let bounds = to_cartesian_bounds(engine.space.bounds());
 
-    Response::SnapshotAvailable {
-        generation: engine.generation(),
+    let telemetry = Telemetry {
+        total_cells: engine.living_count.load(Ordering::Relaxed),
+        is_running: !engine.stopping.load(Ordering::Relaxed),
         gps,
         work_rate: work,
         net_rate: net,
         bounds,
+    };
+
+    Response::SnapshotAvailable {
+        generation: engine.generation(),
+        telemetry,
     }
 }
 
@@ -654,60 +688,23 @@ async fn handle_get_state(
     }
 
     let data = snapshot.unwrap();
-    if viewport.is_none() {
-        // Hybrid Protocol Optimization:
-        // Parse Header -> Update is_running -> Reserialize Header -> Append binary payload
-        if let Ok((mut resp, consumed_len)) = Response::from_bytes(&data) {
-            if let Response::BinaryStateHeader {
-                ref mut is_running, ..
-            } = resp
-            {
-                *is_running = !state.engine.is_stopped();
 
-                // Re-serialize header
-                let json = serde_json::to_vec(&resp).unwrap();
-                let json_len = json.len() as u32;
+    // Always decode and re-encode to ensure proper BinaryStateHeader format
+    match rustylife_core::decode_binary_packet(&data) {
+        Ok(packet) => {
+            let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                packet
+                    .cells()
+                    .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                    .collect()
+            } else {
+                packet.cells().collect()
+            };
 
-                let original_payload = &data[consumed_len..];
-                let mut buf = Vec::with_capacity(4 + json.len() + original_payload.len());
-
-                buf.extend_from_slice(&json_len.to_le_bytes());
-                buf.extend_from_slice(&json);
-                buf.extend_from_slice(original_payload);
-
-                return buf;
-            }
+            rustylife_core::encode_binary_packet(packet.generation, &filtered_cells)
         }
-        // Fallback if parsing fails (shouldn't happen)
-        data.to_vec()
-    } else {
-        // Viewport Filtering (In Memory)
-        match rustylife_core::decode_binary_packet(&data) {
-            Ok(packet) => {
-                let filtered_cells: Vec<_> =
-                    if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                        packet
-                            .cells()
-                            .filter(|((x, y), _)| {
-                                *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y
-                            })
-                            .collect()
-                    } else {
-                        packet.cells().collect()
-                    };
-
-                rustylife_core::encode_binary_packet(
-                    packet.generation,
-                    packet.total_cells,
-                    packet.is_running,
-                    &filtered_cells,
-                    packet.gps,
-                    packet.work_rate,
-                    packet.net_rate,
-                )
-            }
-            Err(e) => Response::Error(format!("Failed to decode snapshot for filtering: {}", e))
-                .to_bytes(),
+        Err(e) => {
+            Response::Error(format!("Failed to decode snapshot for filtering: {}", e)).to_bytes()
         }
     }
 }

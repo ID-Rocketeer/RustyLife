@@ -3,9 +3,8 @@ import { encodeRequest } from './protocol.js';
 
 const countEl = document.getElementById('count');
 const genEl = document.getElementById('generation');
-const runBtn = document.getElementById('run-btn');
+const playPauseBtn = document.getElementById('play-pause-btn');
 const stepBtn = document.getElementById('step-btn');
-const stopBtn = document.getElementById('stop-btn');
 const resetBtn = document.getElementById('reset-btn');
 const originBtn = document.getElementById('origin-btn');
 const quitBtn = document.getElementById('quit-btn');
@@ -38,8 +37,7 @@ let nextRequestPending = false;
 let debounceTimeout = null;
 
 // Telemetry State (Server-Side)
-let cachedTelemetry = { gps: 0, work_rate: 0, net_rate: 0, bounds: null };
-
+let pendingTelemetry = new Map(); // Generation -> Telemetry
 // Panning State
 let offsetX = 0;
 let offsetY = 0;
@@ -123,21 +121,24 @@ function renderCellsHybrid(meta, dataView, binaryOffset) {
     lastState = { meta, dataView, binaryOffset }; // Store for re-rendering pan/zoom
     currentGen = gen;
 
-    const total = BigInt(meta.total_cells);
-    isRunning = meta.is_running;
     const recordCount = Number(meta.record_count);
 
     genEl.innerText = gen.toString();
-    countEl.innerText = total.toLocaleString();
 
-    runBtn.disabled = isRunning;
-    stopBtn.disabled = !isRunning;
-    resetBtn.disabled = isRunning;
-    stepBtn.disabled = isRunning;
-    patternSelect.disabled = isRunning;
+    // Performance Telemetry (Atomic sync with cached announcement)
+    const telemetry = pendingTelemetry.get(meta.generation);
+    if (telemetry) {
+        updateTelemetry(telemetry);
+        pendingTelemetry.delete(meta.generation);
 
-    // Performance Telemetry (Server-Side)
-    updateTelemetry(meta);
+        // Cleanup old entries (robustness)
+        if (pendingTelemetry.size > 100) {
+            const keys = Array.from(pendingTelemetry.keys()).sort((a, b) => a - b);
+            for (let i = 0; i < keys.length - 50; i++) {
+                pendingTelemetry.delete(keys[i]);
+            }
+        }
+    }
 
     // Render Canvas
     ctx.fillStyle = '#000000';
@@ -174,6 +175,15 @@ function renderCellsHybrid(meta, dataView, binaryOffset) {
 function updateTelemetry(meta) {
     if (!meta) return;
 
+    if (meta.is_running !== undefined) {
+        isRunning = meta.is_running;
+        updateButtonStates();
+    }
+
+    // Total Cells / Population
+    const total = meta.total_cells !== undefined ? BigInt(meta.total_cells) : 0n;
+    countEl.innerText = total.toLocaleString();
+
     // Work Rate
     const workRate = meta.work_rate || 0;
     workEl.innerText = formatSI(workRate, 3, false);
@@ -193,8 +203,8 @@ function updateTelemetry(meta) {
     // formatSI(num, width, sign)
     gpsEl.innerText = formatSI(gps, 3, false);
 
-    // Bounds and Expanse - use cachedTelemetry if not in current meta
-    const bounds = meta.bounds || cachedTelemetry.bounds;
+    // Bounds and Expanse
+    const bounds = meta.bounds;
     if (bounds) {
         const [[minX, minY], [maxX, maxY]] = bounds;
         // Bounds already in Cartesian coordinates from server
@@ -212,6 +222,15 @@ function updateTelemetry(meta) {
 function sendRequest(type, payload = null) {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(encodeRequest(type, payload));
+}
+
+
+function updateButtonStates() {
+    playPauseBtn.disabled = false; // Always enabled for toggle
+    playPauseBtn.innerText = isRunning ? "⏸" : "▶";
+    resetBtn.disabled = isRunning;
+    stepBtn.disabled = isRunning;
+    patternSelect.disabled = isRunning;
 }
 
 function requestState() {
@@ -318,7 +337,7 @@ function connect() {
         // So `header.type` === "BinaryStateHeader", and `header.payload` is the object with fields.
 
         if (header.type === "SnapshotAvailable") {
-            const { generation, gps, work_rate, net_rate, bounds } = header.payload;
+            const { generation, telemetry } = header.payload;
             const gen = BigInt(generation);
             if (gen === 0n && currentGen !== 0n) {
                 offsetX = 0;
@@ -327,15 +346,13 @@ function connect() {
             }
             currentGen = gen;
 
-            // Update generation display immediately for real-time feedback
-            genEl.innerText = gen.toString();
+            // (DOM updates removed from here to prevent JS thread starvation)
 
-            // Cache telemetry for real-time display
-            cachedTelemetry = { gps, work_rate, net_rate, bounds };
-            updateTelemetry(cachedTelemetry);
+            // Cache telemetry for atomic update with binary cells
+            pendingTelemetry.set(generation, telemetry);
 
+            // Fetch state immediately to avoid trailing-edge debounce starvation
             requestState();
-
         } else if (header.type === "Welcome") {
             const cores = header.payload.cores;
             coresEl.innerHTML = `[ ${String(cores).padStart(2, '0')} ]`;
@@ -382,9 +399,14 @@ function connect() {
     };
 }
 
-runBtn.onclick = () => sendRequest("Start");
+playPauseBtn.onclick = () => {
+    if (isRunning) {
+        sendRequest("Stop");
+    } else {
+        sendRequest("Start");
+    }
+};
 stepBtn.onclick = () => sendRequest("NextStep");
-stopBtn.onclick = () => sendRequest("Stop");
 resetBtn.onclick = () => sendRequest("Reset");
 originBtn.onclick = () => {
     offsetX = 0;
@@ -394,9 +416,7 @@ originBtn.onclick = () => {
     requestStateDebounced();
 };
 quitBtn.onclick = () => {
-    if (confirm("Shutdown server?")) {
-        sendRequest("Shutdown");
-    }
+    sendRequest("Shutdown");
 };
 
 patternSelect.onchange = (e) => {
@@ -422,6 +442,10 @@ function updateZoom(delta, mouseX = null, mouseY = null) {
 
         offsetX = mouseX - centerX - (worldX * scale);
         offsetY = mouseY - centerY - (worldY * scale);
+    } else {
+        // When using buttons (no mouse focal point), scale offsets proportionally to preserve the logical center
+        offsetX = (offsetX / oldScale) * scale;
+        offsetY = (offsetY / oldScale) * scale;
     }
 
     if (lastState) {
@@ -440,3 +464,4 @@ window.addEventListener('keydown', (e) => {
 });
 
 connect();
+updateButtonStates();

@@ -97,10 +97,15 @@ fn test_storage_correctly_manages_hash_collisions() {
     let mut buckets_found = std::collections::HashMap::new();
 
     for x in 0..1000 {
-        let h = hash_coordinates(x, 0, rustylife_core::BUCKET_COUNT);
+        let bx = x >> 3;
+        let by = 0;
+        let h = hash_coordinates(bx, by, rustylife_core::BUCKET_COUNT);
         if let Some(prev_x) = buckets_found.insert(h, x) {
-            collision_pairs.push((prev_x, x, h));
-            break;
+            // Ensure x and prev_x are NOT in the same block, otherwise it's not a bucket collision
+            if (x >> 3) != (prev_x >> 3) {
+                collision_pairs.push((prev_x, x, h));
+                break;
+            }
         }
     }
 

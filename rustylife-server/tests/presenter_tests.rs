@@ -1,5 +1,5 @@
 use rustylife_core::{
-    BinaryPacket, SimulationPresenter,
+    BinaryPacket, SimulationPresenter, Telemetry,
     engine::{EngineSubscriber, SimulationEngine},
     space::SimulationSpace,
 };
@@ -13,7 +13,7 @@ struct TestPresenter {
 }
 
 impl SimulationPresenter for TestPresenter {
-    fn update_state(&mut self, packet: BinaryPacket<'_>) {
+    fn update_state(&mut self, packet: BinaryPacket<'_>, _telemetry: Telemetry) {
         self.received_generation = Some(packet.generation);
         self.received_cells = packet.cells().collect();
     }
@@ -31,14 +31,23 @@ impl EngineSubscriber for PresenterSubscriber {
         &self,
         _generation: u64,
         data: Arc<Vec<u8>>,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        is_running: bool,
+        gps: f64,
+        work_rate: f64,
+        net_rate: f64,
+        bounds: Option<((i128, i128), (i128, i128))>,
     ) -> bool {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
-            presenter.update_state(packet);
+            let telemetry = Telemetry {
+                total_cells: 0, // Mock for test
+                is_running,
+                gps,
+                work_rate,
+                net_rate,
+                bounds,
+            };
+            presenter.update_state(packet, telemetry);
         }
         true
     }

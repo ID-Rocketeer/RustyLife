@@ -48,7 +48,7 @@ impl AppState {
 }
 
 impl SimulationPresenter for AppState {
-    fn update_state(&mut self, packet: BinaryPacket<'_>) {
+    fn update_state(&mut self, packet: BinaryPacket<'_>, telemetry: rustylife_core::Telemetry) {
         if let Some(((min_x, min_y), (max_x, max_y))) = self.target_viewport {
             self.viewport_cells = packet
                 .cells()
@@ -58,11 +58,12 @@ impl SimulationPresenter for AppState {
             self.viewport_cells = packet.cells().collect();
         }
         self.generation = packet.generation;
-        self.total_cells = packet.total_cells;
-        self.is_running = packet.is_running;
-        self.gps = packet.gps;
-        self.work_rate = packet.work_rate;
-        self.net_rate = packet.net_rate;
+        self.total_cells = telemetry.total_cells;
+        self.is_running = telemetry.is_running;
+        self.gps = telemetry.gps;
+        self.work_rate = telemetry.work_rate;
+        self.net_rate = telemetry.net_rate;
+        self.bounds = telemetry.bounds;
     }
 
     fn update_bounds(&mut self, bounds: Option<((i128, i128), (i128, i128))>) {

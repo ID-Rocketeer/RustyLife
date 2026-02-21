@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web GUI Test Harness</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+        }
+
+        button {
+            margin: 5px;
+            padding: 10px;
+            background: #00ff00;
+            color: #000;
+            border: none;
+            cursor: pointer;
+            font-family: monospace;
+        }
+
+        button:hover {
+            background: #00cc00;
+        }
+
+        #log {
+            background: #000;
+            padding: 10px;
+            border: 1px solid #00ff00;
+            height: 400px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+
+        .log-entry {
+            margin: 2px 0;
+        }
+
+        .log-send {
+            color: #ffff00;
+        }
+
+        .log-recv {
+            color: #00ffff;
+        }
+
+        .log-error {
+            color: #ff0000;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>RustyLife Web GUI Test Harness</h1>
+
+    <div class="controls">
+        <h3>Mock Server Controls</h3>
+        <button onclick="startMockServer()">Start Mock Server</button>
+        <button onclick="stopMockServer()">Stop Mock Server</button>
+        <br>
+        <button onclick="sendWelcome()">Send Welcome</button>
+        <button onclick="sendSnapshotAvailable(1, 5)">Send SnapshotAvailable (gen=1, pop=5)</button>
+        <button onclick="sendBinaryState(1, 5)">Send BinaryState (gen=1, 5 cells)</button>
+        <button onclick="sendError('Test error message')">Send Error</button>
+        <br>
+        <button onclick="simulatePatternLoad()">Simulate: Pattern Load</button>
+        <button onclick="simulateRunning()">Simulate: Running Engine</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script type="module">
+        import { encodeRequest } from './protocol.js';
+
+        let mockWs = null;
+        let mockServer = null;
+
+        window.log = function (message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        };
+
+        window.startMockServer = async function () {
+            log('Starting mock WebSocket server on port 8081...', 'send');
+
+            // For testing, we'll use a simple approach:
+            // Open the actual dashboard.html in an iframe and inject a mock WebSocket
+            const iframe = document.createElement('iframe');
+            iframe.src = './index.html';
+            iframe.style.width = '800px';
+            iframe.style.height = '600px';
+            iframe.style.border = '2px solid #00ff00';
+            document.body.appendChild(iframe);
+
+            iframe.onload = () => {
+                log('Dashboard loaded, injecting mock WebSocket...', 'recv');
+
+                // Inject mock WebSocket into iframe
+                const iframeWindow = iframe.contentWindow;
+                const originalWebSocket = iframeWindow.WebSocket;
+
+                iframeWindow.WebSocket = class MockWebSocket extends EventTarget {
+                    constructor(url) {
+                        super();
+                        log(`Mock WebSocket connecting to: ${url}`, 'recv');
+                        this.url = url;
+                        this.readyState = 0; // CONNECTING
+                        this.binaryType = 'arraybuffer';
+
+                        // Simulate connection
+                        setTimeout(() => {
+                            this.readyState = 1; // OPEN
+                            if (this.onopen) this.onopen({ type: 'open' });
+                            log('Mock WebSocket connected', 'recv');
+                        }, 100);
+
+                        mockWs = this;
+                    }
+
+                    send(data) {
+                        log(`GUI sent: ${data.byteLength} bytes`, 'send');
+                        // Decode and log the request
+                        try {
+                            const buffer = data.buffer ? data.buffer : data;
+                            const view = new DataView(buffer);
+                            const jsonLen = view.getUint32(0, true);
+                            const jsonBytes = new Uint8Array(buffer, 4, jsonLen);
+                            const jsonStr = new TextDecoder().decode(jsonBytes);
+                            const request = JSON.parse(jsonStr);
+                            log(`  Request: ${JSON.stringify(request)}`, 'send');
+
+                            if (request.type === "GetState") {
+                                // Simulate server packing and sending binary state
+                                setTimeout(() => {
+                                    window.sendBinaryState(request.payload.generation, 10);
+                                }, 1);
+                            }
+                        } catch (e) {
+                            log(`  Failed to parse request: ${e}`, 'error');
+                        }
+                    }
+
+                    close() {
+                        this.readyState = 3; // CLOSED
+                        if (this.onclose) this.onclose({ type: 'close' });
+                        log('Mock WebSocket closed', 'recv');
+                    }
+                };
+
+                // Add static readyState constants to match native WebSocket
+                iframeWindow.WebSocket.CONNECTING = 0;
+                iframeWindow.WebSocket.OPEN = 1;
+                iframeWindow.WebSocket.CLOSING = 2;
+                iframeWindow.WebSocket.CLOSED = 3;
+
+                log('Mock WebSocket injected successfully', 'recv');
+            };
+        };
+
+        window.stopMockServer = function () {
+            if (mockWs) {
+                mockWs.close();
+                mockWs = null;
+            }
+            log('Mock server stopped', 'send');
+        };
+
+        window.sendWelcome = function () {
+            if (!mockWs) {
+                log('Mock server not started!', 'error');
+                return;
+            }
+
+            const response = {
+                type: 'Welcome',
+                payload: {
+                    cores: 13,
+                    patterns: [
+                        { name: 'Blinker', description: 'Test pattern' },
+                        { name: 'Glider', description: 'Test pattern 2' }
+                    ]
+                }
+            };
+
+            const json = JSON.stringify(response);
+            const jsonBytes = new TextEncoder().encode(json);
+            const len = jsonBytes.length;
+
+            const buf = new ArrayBuffer(4 + len);
+            const view = new DataView(buf);
+            view.setUint32(0, len, true);
+            new Uint8Array(buf, 4).set(jsonBytes);
+
+            if (mockWs.onmessage) {
+                mockWs.onmessage({ data: buf });
+                log(`Sent Welcome (${len} bytes)`, 'recv');
+            }
+        };
+
+        window.sendSnapshotAvailable = function (generation, population) {
+            if (!mockWs) {
+                log('Mock server not started!', 'error');
+                return;
+            }
+
+            const response = {
+                type: 'SnapshotAvailable',
+                payload: {
+                    generation: generation,
+                    telemetry: {
+                        total_cells: population,
+                        is_running: true,
+                        gps: 1000.0,
+                        work_rate: 50.0,
+                        net_rate: 10.0,
+                        bounds: [[0, 0], [10, 10]]
+                    }
+                }
+            };
+
+            const json = JSON.stringify(response);
+            const jsonBytes = new TextEncoder().encode(json);
+            const len = jsonBytes.length;
+
+            const buf = new ArrayBuffer(4 + len);
+            const view = new DataView(buf);
+            view.setUint32(0, len, true);
+            new Uint8Array(buf, 4).set(jsonBytes);
+
+            if (mockWs.onmessage) {
+                mockWs.onmessage({ data: buf });
+                log(`Sent SnapshotAvailable gen=${generation} pop=${population}`, 'recv');
+            }
+        };
+
+        window.sendBinaryState = function (generation, cellCount) {
+            if (!mockWs) {
+                log('Mock server not started!', 'error');
+                return;
+            }
+
+            const header = {
+                type: 'BinaryStateHeader',
+                payload: {
+                    generation: generation,
+                    record_count: cellCount
+                }
+            };
+
+            const json = JSON.stringify(header);
+            const jsonBytes = new TextEncoder().encode(json);
+            const jsonLen = jsonBytes.length;
+
+            // Create binary cells (x, y, state) - each 33 bytes
+            const binarySize = cellCount * 33;
+            const totalSize = 4 + jsonLen + binarySize + 4; // +4 for CRC
+
+            const buf = new ArrayBuffer(totalSize);
+            const view = new DataView(buf);
+
+            // Length prefix
+            view.setUint32(0, jsonLen, true);
+
+            // JSON header
+            new Uint8Array(buf, 4).set(jsonBytes);
+
+            // Binary cells (simple pattern: horizontal line)
+            let offset = 4 + jsonLen;
+            for (let i = 0; i < cellCount; i++) {
+                // x coordinate (i128 = 16 bytes)
+                view.setBigInt64(offset, BigInt(i), true);
+                view.setBigInt64(offset + 8, 0n, true);
+                offset += 16;
+
+                // y coordinate (i128 = 16 bytes)
+                view.setBigInt64(offset, 0n, true);
+                view.setBigInt64(offset + 8, 0n, true);
+                offset += 16;
+
+                // state (u8 = 1 byte)
+                view.setUint8(offset, 1); // Alive
+                offset += 1;
+            }
+
+            // CRC (fake it for now)
+            view.setUint32(offset, 0x12345678, true);
+
+            if (mockWs.onmessage) {
+                mockWs.onmessage({ data: buf });
+                log(`Sent BinaryState gen=${generation} cells=${cellCount}`, 'recv');
+            }
+        };
+
+        window.sendError = function (message) {
+            if (!mockWs) {
+                log('Mock server not started!', 'error');
+                return;
+            }
+
+            const response = {
+                type: 'Error',
+                payload: message
+            };
+
+            const json = JSON.stringify(response);
+            const jsonBytes = new TextEncoder().encode(json);
+            const len = jsonBytes.length;
+
+            const buf = new ArrayBuffer(4 + len);
+            const view = new DataView(buf);
+            view.setUint32(0, len, true);
+            new Uint8Array(buf, 4).set(jsonBytes);
+
+            if (mockWs.onmessage) {
+                mockWs.onmessage({ data: buf });
+                log(`Sent Error: ${message}`, 'recv');
+            }
+        };
+
+        window.simulatePatternLoad = function () {
+            log('=== Simulating Pattern Load ===', 'send');
+            sendWelcome();
+            setTimeout(() => sendSnapshotAvailable(0, 5), 500);
+            setTimeout(() => sendBinaryState(0, 5), 1000);
+        };
+
+        window.simulateRunning = function () {
+            log('=== Simulating Running Engine ===', 'send');
+            let gen = 1;
+            const interval = setInterval(() => {
+                if (gen > 100) {
+                    clearInterval(interval);
+                    log('Simulation complete', 'send');
+                    return;
+                }
+                sendSnapshotAvailable(gen, 5 + gen);
+                gen++;
+            }, 5);
+        };
+    </script>
+</body>
+
+</html>

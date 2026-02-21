@@ -29,18 +29,16 @@ fn test_gps_data_integrity() {
 
             println!("JSON Header: {}", json_str);
 
-            // 5. Verify "gps" field exists
+            // 5. Verify "gps" field DOES NOT exist in BinaryStateHeader
             assert!(
-                json_str.contains("\"gps\":"),
-                "JSON should contain gps field"
+                !json_str.contains("\"gps\":"),
+                "JSON should NOT contain gps field in BinaryStateHeader after protocol stripping"
             );
 
-            // Deserialize to check value
+            // Deserialize to check variant
             let response: rustylife_core::Response = serde_json::from_str(json_str).unwrap();
-            if let rustylife_core::Response::BinaryStateHeader { gps, .. } = response {
-                println!("GPS from packet: {}", gps);
-                // It might be 0.0 if not enough time passed or dt=0
-                // But existence is key.
+            if let rustylife_core::Response::BinaryStateHeader { .. } = response {
+                println!("Confirmed: BinaryStateHeader is stripped of GPS");
             } else {
                 panic!("Wrong response type");
             }

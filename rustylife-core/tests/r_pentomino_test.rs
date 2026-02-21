@@ -17,6 +17,7 @@ impl EngineSubscriber for GenerationTracker {
         &self,
         _generation: u64,
         data: Arc<Vec<u8>>,
+        _is_running: bool,
         _gps: f64,
         _work_rate: f64,
         _net_rate: f64,
