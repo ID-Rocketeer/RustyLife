@@ -803,13 +803,11 @@ fn test_engine_seed_processing() {
     }
     assert!(seeded, "Engine failed to process Seed task within timeout");
 
-    // Start engine to process seed evolution
-    engine.start();
+    // Step engine to process EXACTLY 1 seed evolution generation
+    engine.step();
 
     // Wait for at least 1 generation to ensure processing
     subscriber.wait_for_generation(1);
-
-    engine.stop();
 
     // Wait for quiescence
     let wait_start = std::time::Instant::now();

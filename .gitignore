@@ -9,3 +9,8 @@ staging/
 *.binsnap
 *.log
 *.py
+
+# Web GUI Testing
+node_modules/
+!package.json
+!package-lock.json

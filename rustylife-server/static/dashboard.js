@@ -73,7 +73,7 @@ window.addEventListener('mousemove', (e) => {
         offsetY += dy;
         lastMouseX = e.clientX;
         lastMouseY = e.clientY;
-        if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset);
+        if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
         updateInstrumentation();
     }
 });
@@ -101,9 +101,7 @@ function resizeCanvas() {
     canvas.width = canvas.parentElement.clientWidth;
     canvas.height = canvas.parentElement.clientHeight;
     if (lastState) {
-        if (lastState) {
-            renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset);
-        }
+        renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     }
     updateInstrumentation();
     requestStateDebounced();
@@ -113,11 +111,12 @@ resizeCanvas();
 
 
 // Adapted for Hybrid Protocol
-function renderCellsHybrid(meta, dataView, binaryOffset) {
+function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
     const gen = BigInt(meta.generation);
 
     // Drop out-of-order packets based on what we actually rendered, BUT accept Gen 0 (Reset)
-    if (gen <= lastRenderedGen && gen !== 0n) return;
+    // Local UI events override this check using forceRender.
+    if (!forceRender && gen <= lastRenderedGen && gen !== 0n) return;
 
     lastState = { meta, dataView, binaryOffset }; // Store for re-rendering pan/zoom
     lastRenderedGen = gen;
@@ -414,7 +413,7 @@ resetBtn.onclick = () => sendRequest("Reset");
 originBtn.onclick = () => {
     offsetX = 0;
     offsetY = 0;
-    if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset);
+    if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     updateInstrumentation();
     requestStateDebounced();
 };
@@ -452,7 +451,7 @@ function updateZoom(delta, mouseX = null, mouseY = null) {
     }
 
     if (lastState) {
-        renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset);
+        renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     }
     updateInstrumentation();
     requestStateDebounced();
