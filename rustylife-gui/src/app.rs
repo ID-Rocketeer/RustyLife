@@ -286,6 +286,7 @@ impl eframe::App for RustyLifeApp {
                                     )
                                     .fill(Color32::from_rgb(180, 0, 0)),
                                 )
+                                .on_hover_text("Shuts down the simulation server")
                                 .clicked()
                             {
                                 self.handler.shutdown();
