@@ -15,6 +15,15 @@ fn encode_request(req: &Request) -> Vec<u8> {
 
 #[tokio::test]
 async fn test_gui_shutdown_lifecycle() {
+    // Skip if running in headless Linux CI without a display
+    if std::env::consts::OS == "linux"
+        && std::env::var("DISPLAY").is_err()
+        && std::env::var("WAYLAND_DISPLAY").is_err()
+    {
+        println!("Skipping GUI test on headless Linux system");
+        return;
+    }
+
     // 1. Spawn Server with GUI
     let mut server_process = std::process::Command::new("cargo")
         .args([
