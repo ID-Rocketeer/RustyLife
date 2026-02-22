@@ -3,7 +3,7 @@
 This document tracks future features, investigations, and known issues that have not yet been scheduled, to ensure cross-computer and cross-user visibility.
 
 ## GUI Issues
-- [ ] **Investigate Native GUI Termination:** Sometimes the Native GUI client (`rustylife-client`) completely terminates the process when the Quit button is clicked, instead of cleanly stopping the server and exiting. Investigate why this behavior is inconsistent across runs.
+- [x] **Investigate Native GUI Termination:** Sometimes the Native GUI client (`rustylife-client`) completely terminates the process when the Quit button is clicked, instead of cleanly stopping the server and exiting. Investigate why this behavior is inconsistent across runs.
 - [ ] **Investigate Native GUI Zoom Invariance:** Verify that the zoom-in/out buttons in the native and network GUIs accurately preserve the center coordinates when zooming. (This was a bug recently identified and fixed in the Web GUI's `dashboard.js`).
 
 ## Architecture & Testing

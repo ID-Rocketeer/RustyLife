@@ -289,7 +289,6 @@ impl eframe::App for RustyLifeApp {
                                 .clicked()
                             {
                                 self.handler.shutdown();
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
 
                             ui.add_space(15.0);
