@@ -81,3 +81,14 @@ You need **Rust** installed on your machine.
 - **Run Tests**: `cargo test`
 - **Check Lints**: `cargo check`
 - **Format Code**: `cargo fmt`
+
+### Git Hooks (Optional but Recommended)
+To prevent accidentally committing failing code, this repository includes a pre-commit hook that runs the Rust and Node.js test suites.
+
+> [!WARNING]
+> Only configure executing local git hooks if you trust the repository. The provided hooks are only needed for committing code changes to this project, and you should intuitively review `scripts/pre-commit` to verify you are comfortable with what the hook is designed to do before executing it.
+
+To install the hooks locally:
+```bash
+git config core.hooksPath scripts/
+```

@@ -1,0 +1,20 @@
+#!/bin/sh
+# pre-commit hook to run Rust and JS tests before allowing a commit
+
+echo "[pre-commit] Running Rust Engine tests..."
+if ! cargo test; then
+    echo "[pre-commit] Cargo tests failed. Commit aborted."
+    exit 1
+fi
+
+echo "[pre-commit] Running Web GUI tests..."
+cd rustylife-server || exit 1
+
+# Using 'npm run test' works in Git Bash environments on Windows.
+if ! npm run test; then
+    echo "[pre-commit] Web GUI tests failed. Commit aborted."
+    exit 1
+fi
+
+echo "[pre-commit] All native and frontend tests passed! Proceeding with commit."
+exit 0
