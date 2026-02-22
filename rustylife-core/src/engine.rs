@@ -66,14 +66,10 @@ pub enum Tasks {
 pub enum IoTask {
     Snapshot {
         generation: u64,
-        living_count: u64,
-        buckets: Vec<Vec<SnapshotRecord>>,
+        cells: Vec<((i128, i128), u8)>,
         is_running: bool,
-        buffer_idx: usize,
-        epoch: u64,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
+        work: u64,
+        net: i64,
     },
 }
 
@@ -250,6 +246,8 @@ pub struct Engine {
     pub snapshots: SnapshotStore,
     pub patterns: Mutex<Vec<PatternInfo>>,
     pub active_pattern: Mutex<Option<String>>,
+    pub io_tx: std::sync::mpsc::SyncSender<IoTask>,
+    pub io_pool_rx: crossbeam_channel::Receiver<Vec<((i128, i128), u8)>>,
 }
 
 pub struct CommitBuffer {
@@ -285,6 +283,9 @@ impl Engine {
 
         let initial_pop = space.total_population();
 
+        let (io_tx, io_rx) = std::sync::mpsc::sync_channel(2);
+        let (io_pool_tx, io_pool_rx) = crossbeam_channel::unbounded();
+
         let engine = Arc::new(Self {
             space,
             work_queue: Arc::new(WorkQueue::new(pool_size)),
@@ -311,14 +312,27 @@ impl Engine {
             active_pattern: Mutex::new(None),
             current_generation_bounds: Mutex::new(None),
             transition_lock: Mutex::new(()),
+            io_tx,
+            io_pool_rx,
         });
 
         for i in 0..pool_size {
             let engine_clone = engine.clone();
-            std::thread::spawn(move || {
-                Self::run_worker(engine_clone, i);
-            });
+            std::thread::Builder::new()
+                .name(format!("Worker-{}", i))
+                .spawn(move || {
+                    Self::run_worker(engine_clone, i);
+                })
+                .expect("Failed to spawn engine worker thread");
         }
+
+        let io_engine_clone = engine.clone();
+        std::thread::Builder::new()
+            .name("Worker-IO".to_string())
+            .spawn(move || {
+                Self::run_io_worker(io_engine_clone, io_rx, io_pool_tx);
+            })
+            .expect("Failed to spawn IO thread");
 
         engine
     }
@@ -967,14 +981,6 @@ impl Engine {
             engine.dead_block_count.store(0, Ordering::SeqCst);
         }
 
-        // Collect all living cells for serialization (snapshot)
-        // Only if a snapshot is needed?
-        // Current implementation collects it every generation for packet?
-        // Let's check below.
-        // It uses `living_cells` for `encode_binary_packet`.
-        let living_cells = engine.space.collect_all_states();
-
-        // Metrics are already updated in commit_bucket phase
         let work = engine.work.load(Ordering::SeqCst); // Accumulator
         let net = engine.net.load(Ordering::SeqCst);
 
@@ -985,16 +991,70 @@ impl Engine {
             .unwrap()
             .update(generation, work, net);
 
-        // NO-OP: Stripped metrics moved to SnapshotAvailable announcements
+        // Extract cells using Memory Pooling
+        let mut vec = engine.io_pool_rx.try_recv().unwrap_or_else(|_| Vec::new());
+        let raw_living_count = engine.living_count.load(Ordering::SeqCst) as usize;
 
-        // Serialize (Stripped metrics: strictly in SnapshotAvailable announcements)
-        let packet_data = crate::encode_binary_packet(generation, &living_cells);
-        let packet = Arc::new(packet_data);
+        // Handle tests that bypass `engine.seed()` and let living_count underflow
+        let living_count = if raw_living_count > isize::MAX as usize {
+            0
+        } else {
+            raw_living_count
+        };
 
-        // Store
-        engine.snapshots.insert(generation, packet.clone());
+        // Ensure capacity with 25% headroom if reallocation is needed
+        if vec.capacity() < living_count {
+            let required_cap = living_count.saturating_add(living_count / 4);
+            // capacity is smaller than length needed. subtract length just to be safe for reserve API
+            let reserve_amount = required_cap.saturating_sub(vec.len());
+            vec.reserve(reserve_amount);
+        }
 
-        // Notify
-        engine.notify_subscribers(generation, packet, is_running);
+        engine.space.collect_all_states_into(&mut vec);
+
+        // Fire to async I/O worker
+        let _ = engine.io_tx.send(IoTask::Snapshot {
+            generation,
+            cells: vec,
+            is_running,
+            work,
+            net,
+        });
+    }
+
+    fn run_io_worker(
+        engine: Arc<Self>,
+        io_rx: std::sync::mpsc::Receiver<IoTask>,
+        io_pool_tx: crossbeam_channel::Sender<Vec<((i128, i128), u8)>>,
+    ) {
+        loop {
+            match io_rx.recv() {
+                Ok(IoTask::Snapshot {
+                    generation,
+                    mut cells,
+                    is_running,
+                    work: _, // work/net currently not used locally by io thread, but passed for future
+                    net: _,
+                }) => {
+                    // Serialize
+                    let packet_data = crate::encode_binary_packet(generation, &cells);
+                    let packet = Arc::new(packet_data);
+
+                    // Store
+                    engine.snapshots.insert(generation, packet.clone());
+
+                    // Notify
+                    engine.notify_subscribers(generation, packet, is_running);
+
+                    // Recycle memory block
+                    cells.clear();
+                    let _ = io_pool_tx.send(cells);
+                }
+                Err(_) => {
+                    // Channel disconnected (Engine shutting down)
+                    break;
+                }
+            }
+        }
     }
 }

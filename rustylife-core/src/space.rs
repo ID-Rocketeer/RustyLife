@@ -336,6 +336,16 @@ impl SimulationSpace {
         all
     }
 
+    pub fn collect_all_states_into(&self, all: &mut Vec<((i128, i128), u8)>) {
+        let guard = self.mask.read();
+        let current_mask = guard.current_state_mask();
+        let last_mask = guard.last_state_mask();
+        let last_last_mask = guard.next_state_mask();
+
+        self.storage()
+            .collect_all(current_mask, last_mask, last_last_mask, all);
+    }
+
     /// Clears the entire simulation space.
     pub fn clear(&self) {
         self.storage().clear();
