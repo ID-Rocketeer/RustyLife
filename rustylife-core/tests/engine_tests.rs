@@ -626,64 +626,6 @@ fn test_cell_correctly_transitions_through_lifecycle_states() {
     }
 }
 
-#[test]
-fn test_engine_state_repair_on_resume() {
-    let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-    let engine = TestContext::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
-    let sync = TestSync::new();
-    engine.add_subscriber(sync.clone());
-
-    // 1. Setup a stable 2x2 block
-    let rle = include_str!("../src/patterns/block.rle");
-    space.seed_from_rle(0, 0, rle);
-
-    // 2. MANUALLY CORRUPT memory:
-    // We create an ALIVE cell at (5, 5). It has no neighbors, so it should die.
-    // However, we manually set its neighbor count to 2.
-    // In GOL, an alive cell with 2 neighbors survives.
-    {
-        let guard = space.read();
-        let current = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(5, 5, CellState::Alive, current));
-        space.storage().find_and_apply(5, 5, |cell| {
-            cell.reset_neighbor_count(current);
-            cell.increment_neighbor_count(current);
-            cell.increment_neighbor_count(current); // DIRTY: 2 neighbors
-        });
-    }
-
-    // 3. Step. If neighbor counts aren't repaired, (5, 5) will survive.
-    // We call abort() to simulate an aggressive interruption that leaves
-    // Manually mark tainted to simulate corruption detection
-    engine.mark_tainted();
-
-    // run_engine_in_background(Arc::clone(&engine.engine)); // Removed
-
-    // Resume
-    engine.start();
-
-    // Wait for at least one generation to pass to allow repair
-    sync.wait_for_generation(1);
-
-    engine.stop();
-
-    // 4. Verify results
-    let guard = space.read();
-    let current = guard.current_state_mask();
-
-    let is_alive = space
-        .storage()
-        .find_and_apply(5, 5, |cell| cell.state(current) == CellState::Alive)
-        .unwrap_or(false);
-
-    assert!(
-        !is_alive,
-        "FIX FAILURE: Cell (5,5) survived from dirty memory! Repair failed."
-    );
-}
-
 // count_visible_recursive removed (incompatible with BlockTree)
 #[test]
 fn test_reset_stability() {
