@@ -1,6 +1,18 @@
 #!/bin/sh
 # pre-commit hook to run Rust and JS tests before allowing a commit
 
+echo "[pre-commit] Checking Code Formatting..."
+if ! cargo fmt -- --check; then
+    echo "[pre-commit] Cargo fmt failed. Commit aborted."
+    exit 1
+fi
+
+echo "[pre-commit] Checking Rust Lints..."
+if ! cargo clippy -- -D warnings; then
+    echo "[pre-commit] Cargo clippy failed. Commit aborted."
+    exit 1
+fi
+
 echo "[pre-commit] Running Rust Engine tests..."
 if ! cargo test; then
     echo "[pre-commit] Cargo tests failed. Commit aborted."

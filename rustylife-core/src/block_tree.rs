@@ -19,7 +19,15 @@ impl Block8x8 {
     pub fn new() -> Self {
         Self { boards: [0; 3] }
     }
+}
 
+impl Default for Block8x8 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Block8x8 {
     /// Set a bit in the block for a specific mask index.
     pub fn set_bit(&mut self, local_x: u8, local_y: u8, mask_idx: usize, state: bool) {
         let bit_index = (local_y as usize * 8) + local_x as usize;
@@ -43,6 +51,7 @@ impl Block8x8 {
     /// * `nw`, `ne`, `sw`, `se`: Corner bits.
     /// * `current_idx`: Index of the current generation in `boards`.
     /// * `next_idx`: Index where the next generation should be written.
+    #[allow(clippy::too_many_arguments)]
     pub fn step(
         &mut self,
         n_mask: u64,
@@ -278,7 +287,15 @@ impl BlockTree {
             arena: BlockArena::new(),
         }
     }
+}
 
+impl Default for BlockTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlockTree {
     pub fn bounds(&self, mask: usize) -> Option<((i128, i128), (i128, i128))> {
         let mask_idx = Self::mask_to_index(mask);
         let mut min_x = i128::MAX;
@@ -610,7 +627,7 @@ impl BlockTree {
         }
 
         let mut total = 0;
-        for (_i, node) in self.arena.nodes.iter().enumerate() {
+        for node in self.arena.nodes.iter() {
             if !node.block.is_dead() {
                 let count = node.block.boards[board_idx].count_ones() as u64;
                 total += count;

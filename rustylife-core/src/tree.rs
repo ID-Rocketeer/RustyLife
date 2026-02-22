@@ -84,7 +84,15 @@ impl CellTree {
             arena: NodeArena::new(),
         }
     }
+}
 
+impl Default for CellTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CellTree {
     pub fn insert(&mut self, cell: Cell) {
         let coords = cell.coordinates();
         self.find_or_create_and_apply(coords, || cell, |_| ());
@@ -319,6 +327,7 @@ impl CellTree {
         }
     }
 
+    #[allow(clippy::too_many_arguments, clippy::collapsible_if)]
     fn collect_in_rect_recursive(
         &self,
         idx: NodeIndex,
@@ -388,7 +397,7 @@ impl CellTree {
         }
     }
 
-    pub fn commit_and_prune<F>(&mut self, cur: usize, next: usize, last: usize, mut observer: F)
+    pub fn commit_and_prune<F>(&mut self, cur: usize, next: usize, _last: usize, mut observer: F)
     where
         F: FnMut(&Cell, crate::cell::CellState),
     {
@@ -397,7 +406,7 @@ impl CellTree {
             &mut self.root,
             cur,
             next,
-            last,
+            _last,
             &mut observer,
         );
     }
@@ -407,7 +416,7 @@ impl CellTree {
         node_idx_opt: &mut Option<NodeIndex>,
         cur: usize,
         next: usize,
-        last: usize,
+        _last: usize,
         observer: &mut F,
     ) where
         F: FnMut(&Cell, crate::cell::CellState),
@@ -415,11 +424,11 @@ impl CellTree {
         if let Some(idx) = node_idx_opt.take() {
             // Recurse first
             let mut left = arena.get(idx).left;
-            Self::commit_and_prune_recursive(arena, &mut left, cur, next, last, observer);
+            Self::commit_and_prune_recursive(arena, &mut left, cur, next, _last, observer);
             arena.get_mut(idx).left = left;
 
             let mut right = arena.get(idx).right;
-            Self::commit_and_prune_recursive(arena, &mut right, cur, next, last, observer);
+            Self::commit_and_prune_recursive(arena, &mut right, cur, next, _last, observer);
             arena.get_mut(idx).right = right;
 
             // Calculate next state

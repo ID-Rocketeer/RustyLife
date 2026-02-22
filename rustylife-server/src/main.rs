@@ -250,10 +250,12 @@ fn main() {
     engine.add_subscriber(subscriber);
 
     let gui_state = if args.gui {
-        let mut state = AppState::default();
-        state.cores = pool_size;
-        state.is_connected = true; // Native GUI is always "connected" to the internal engine
-        state.patterns = engine.get_catalog();
+        let state = rustylife_gui::AppState {
+            cores: pool_size,
+            is_connected: true, // Native GUI is always "connected" to the internal engine
+            patterns: engine.get_catalog(),
+            ..Default::default()
+        };
         let state = Arc::new(Mutex::new(state));
 
         let gui_presenter = Arc::clone(&state) as Arc<Mutex<dyn SimulationPresenter>>;
@@ -400,6 +402,7 @@ fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
         if let Ok(entries) = std::fs::read_dir(patterns_dir) {
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
+                #[allow(clippy::collapsible_if)]
                 if path.extension().and_then(|s| s.to_str()) == Some("rle") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         let mut name = path.file_stem().unwrap().to_string_lossy().to_string();
@@ -407,14 +410,14 @@ fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
 
                         // Simple metadata parsing
                         for line in content.lines() {
-                            if line.starts_with("#N") {
-                                name = line[2..].trim().to_string();
-                            } else if line.starts_with("#C") {
-                                let comment = line[2..].trim();
+                            if let Some(stripped) = line.strip_prefix("#N") {
+                                name = stripped.trim().to_string();
+                            } else if let Some(stripped) = line.strip_prefix("#C") {
+                                let comment = stripped.trim();
                                 if description == "User loaded pattern" {
                                     description = comment.to_string();
                                 } else {
-                                    description.push_str(" ");
+                                    description.push(' ');
                                     description.push_str(comment);
                                 }
                             }
@@ -516,12 +519,10 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
         cores: state.cores,
         patterns: state.engine.get_catalog(),
     };
-    let _ = socket
-        .send(Message::Binary(welcome.to_bytes().into()))
-        .await;
+    let _ = socket.send(Message::Binary(welcome.to_bytes())).await;
 
     let resp = make_snapshot_response(&state.engine);
-    let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
+    let _ = socket.send(Message::Binary(resp.to_bytes())).await;
 
     loop {
         tokio::select! {
@@ -541,7 +542,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                             }
                             Request::GetState { generation, viewport } => {
                                 let resp = handle_get_state(&state, generation, viewport).await;
-                                let _ = socket.send(Message::Binary(resp.into())).await;
+                                let _ = socket.send(Message::Binary(resp)).await;
                             }
                             Request::Start => {
                                 state.engine.start();
@@ -555,7 +556,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
 
                                 // Force a UI update so the client knows we stopped
                                 let resp = make_snapshot_response(&state.engine);
-                                let _ = socket.send(Message::Binary(resp.to_bytes().into())).await;
+                                let _ = socket.send(Message::Binary(resp.to_bytes())).await;
                             }
                             Request::Seed(pattern) => {
                                 state.engine.seed(pattern);
@@ -581,7 +582,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
             result = rx.recv() => {
                 if let Ok(resp) = result {
                     // resp is already Response::SnapshotAvailable
-                    if socket.send(Message::Binary(resp.to_bytes().into())).await.is_err() {
+                    if socket.send(Message::Binary(resp.to_bytes())).await.is_err() {
                         break;
                     }
                 }

@@ -308,8 +308,10 @@ impl SimulationSpace {
         self.storage.get()
     }
 
-    /// SAFETY: Must only be called during a gated phase where no other thread
+    /// # Safety
+    /// Must only be called during a gated phase where no other thread
     /// is accessing the storage.
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn storage_mut(&self) -> &mut SparseStorage {
         unsafe { &mut *self.storage.get() }
     }
@@ -502,7 +504,7 @@ impl SimulationSpace {
         let start_x = x;
 
         for ch in data.chars() {
-            if ch.is_digit(10) {
+            if ch.is_ascii_digit() {
                 num_str.push(ch);
             } else if ch == 'b' || ch == 'B' || ch == 'o' || ch == 'O' || ch == '$' || ch == '!' {
                 let count = if num_str.is_empty() {
@@ -562,6 +564,7 @@ impl SimulationSpace {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn encode_to_file_with_masks(
         &self,
         path: &std::path::Path,
@@ -599,7 +602,7 @@ impl SimulationSpace {
         // Flush buffer back to file to append CRC
         let mut file = buffered_writer
             .into_inner()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         // 3. Append CRC32
         let crc = hasher.finalize();

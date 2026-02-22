@@ -17,7 +17,7 @@ fn encode_request(req: &Request) -> Vec<u8> {
 async fn test_gui_shutdown_lifecycle() {
     // 1. Spawn Server with GUI
     let mut server_process = std::process::Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "rustylife-server",

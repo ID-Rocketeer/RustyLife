@@ -18,7 +18,15 @@ impl SnapshotStore {
             store: RwLock::new(HashMap::new()),
         }
     }
+}
 
+impl Default for SnapshotStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SnapshotStore {
     pub fn insert(&self, generation: u64, data: Arc<Vec<u8>>) {
         if let Ok(mut lock) = self.store.write() {
             lock.insert(generation, data);
@@ -81,6 +89,7 @@ pub struct SnapshotRecord {
 }
 
 pub trait EngineSubscriber: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
     fn on_snapshot_available(
         &self,
         generation: u64,
@@ -130,9 +139,8 @@ impl WorkQueue {
     pub fn purge(&self) {
         self.queue.push(Tasks::Stop);
         loop {
-            match self.queue.steal() {
-                crossbeam_deque::Steal::Empty => break,
-                _ => {}
+            if let crossbeam_deque::Steal::Empty = self.queue.steal() {
+                break;
             }
         }
         self.in_flight_count.store(0, Ordering::SeqCst);
@@ -166,7 +174,15 @@ impl Telemetry {
             last_net_count: 0,
         }
     }
+}
 
+impl Default for Telemetry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Telemetry {
     pub fn update(&mut self, _generation: u64, work_count: u64, net_count: i64) {
         let now = std::time::Instant::now();
         let delta = now.duration_since(self.last_tick).as_secs_f64();
@@ -234,6 +250,7 @@ pub struct Engine {
     pub record_buffers: Vec<Vec<Mutex<Vec<SnapshotRecord>>>>,
     pub epoch: AtomicU64,
     pub telemetry: Mutex<Telemetry>,
+    #[allow(clippy::type_complexity)]
     pub current_generation_bounds: Mutex<Option<((i128, i128), (i128, i128))>>,
     pub transition_lock: Mutex<()>,
 
@@ -615,7 +632,7 @@ impl Engine {
     fn initiate_spread(engine: &Arc<Self>) {
         let bucket_count = engine.space.storage().buckets.len();
         let total_batches = std::cmp::max(1, engine.pool_size * 4);
-        let batch_size = (bucket_count + total_batches - 1) / total_batches;
+        let batch_size = bucket_count.div_ceil(total_batches);
 
         let mut tasks = Vec::new();
         for i in (0..bucket_count).step_by(batch_size) {
@@ -762,7 +779,7 @@ impl Engine {
 
         let bucket_count = engine.space.storage().buckets.len();
         let total_batches = std::cmp::max(1, engine.pool_size * 4);
-        let batch_size = (bucket_count + total_batches - 1) / total_batches;
+        let batch_size = bucket_count.div_ceil(total_batches);
 
         let mut tasks = Vec::new();
         for i in (0..bucket_count).step_by(batch_size) {
@@ -1027,34 +1044,27 @@ impl Engine {
         io_rx: std::sync::mpsc::Receiver<IoTask>,
         io_pool_tx: crossbeam_channel::Sender<Vec<((i128, i128), u8)>>,
     ) {
-        loop {
-            match io_rx.recv() {
-                Ok(IoTask::Snapshot {
-                    generation,
-                    mut cells,
-                    is_running,
-                    work: _, // work/net currently not used locally by io thread, but passed for future
-                    net: _,
-                }) => {
-                    // Serialize
-                    let packet_data = crate::encode_binary_packet(generation, &cells);
-                    let packet = Arc::new(packet_data);
+        while let Ok(IoTask::Snapshot {
+            generation,
+            mut cells,
+            is_running,
+            work: _, // work/net currently not used locally by io thread, but passed for future
+            net: _,
+        }) = io_rx.recv()
+        {
+            // Serialize
+            let packet_data = crate::encode_binary_packet(generation, &cells);
+            let packet = Arc::new(packet_data);
 
-                    // Store
-                    engine.snapshots.insert(generation, packet.clone());
+            // Store
+            engine.snapshots.insert(generation, packet.clone());
 
-                    // Notify
-                    engine.notify_subscribers(generation, packet, is_running);
+            // Notify
+            engine.notify_subscribers(generation, packet, is_running);
 
-                    // Recycle memory block
-                    cells.clear();
-                    let _ = io_pool_tx.send(cells);
-                }
-                Err(_) => {
-                    // Channel disconnected (Engine shutting down)
-                    break;
-                }
-            }
+            // Recycle memory block
+            cells.clear();
+            let _ = io_pool_tx.send(cells);
         }
     }
 }

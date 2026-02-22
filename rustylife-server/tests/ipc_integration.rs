@@ -35,7 +35,7 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
     // Wait for server to start with a timeout
     timeout(Duration::from_secs(30), async {
         loop {
-            if let Ok(_) = TcpStream::connect("127.0.0.1:9002").await {
+            if TcpStream::connect("127.0.0.1:9002").await.is_ok() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

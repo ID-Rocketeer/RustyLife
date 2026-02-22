@@ -784,14 +784,17 @@ fn test_engine_seed_processing() {
         let mut found_cell = false;
         // Check Mask 1, 2, 4
         for m in [1, 2, 4] {
-            if let Some(_) = space.storage().find_and_apply(1, 0, |c| {
-                if c.state(m) == rustylife_core::cell::CellState::Alive {
-                    found_cell = true;
-                }
-            }) {
-                if found_cell {
-                    break;
-                }
+            if space
+                .storage()
+                .find_and_apply(1, 0, |c| {
+                    if c.state(m) == rustylife_core::cell::CellState::Alive {
+                        found_cell = true;
+                    }
+                })
+                .is_some()
+                && found_cell
+            {
+                break;
             }
         }
         if found_cell {
@@ -901,14 +904,17 @@ fn test_engine_seed_by_name() {
         let guard = space.read();
         let mut found_cell = false;
         for m in [1, 2, 4] {
-            if let Some(_) = space.storage().find_and_apply(1, 0, |c| {
-                if c.state(m) == rustylife_core::cell::CellState::Alive {
-                    found_cell = true;
-                }
-            }) {
-                if found_cell {
-                    break;
-                }
+            if space
+                .storage()
+                .find_and_apply(1, 0, |c| {
+                    if c.state(m) == rustylife_core::cell::CellState::Alive {
+                        found_cell = true;
+                    }
+                })
+                .is_some()
+                && found_cell
+            {
+                break;
             }
         }
         if found_cell {

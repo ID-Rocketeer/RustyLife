@@ -87,7 +87,7 @@ impl eframe::App for RustyLifeApp {
 
         // Check for shutdown signal
         if let Some(rx) = &mut self.shutdown_rx {
-            if let Ok(_) = rx.try_recv() {
+            if rx.try_recv().is_ok() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
             }

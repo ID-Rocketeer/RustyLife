@@ -3,13 +3,11 @@ use rustylife_core::block_tree::Block8x8;
 use rustylife_core::cell::{Cell, CellState};
 
 fn scalar_update(cells: &mut [Cell; 64], mask: usize, next_mask: usize) {
-    for i in 0..64 {
+    for c in cells.iter_mut().take(64) {
         let mut count = 0;
         for _ in 0..8 {
             count += black_box(1);
         }
-
-        let c = &mut cells[i];
         if count == 3 {
             c.set_state_at(next_mask, CellState::Alive);
         } else if count == 2 {

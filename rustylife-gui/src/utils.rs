@@ -39,6 +39,7 @@ pub fn format_si(val: f64, digits: usize, signed: bool) -> String {
     let width = digits + 3; // digits + 1 (dot) + 2 (fraction)
 
     if v == 0.0 {
+        #[allow(clippy::format_in_format_args)]
         return format!(
             "[ {}{} \u{00A0}/S ]",
             s,

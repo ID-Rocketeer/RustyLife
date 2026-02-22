@@ -10,7 +10,15 @@ impl SimulationMasks {
             mask_lock: RwLock::new(0b001),
         }
     }
+}
 
+impl Default for SimulationMasks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SimulationMasks {
     /// Provides a read-only guard to the current state mask.
     /// While this guard is held, the mask cannot be cycled.
     pub fn read(&self) -> MaskGuard<'_> {

@@ -38,8 +38,8 @@ impl Default for AppState {
 impl AppState {
     pub fn expanse(&self) -> (u64, u64) {
         if let Some(((min_x, min_y), (max_x, max_y))) = self.bounds {
-            let width = (max_x - min_x).abs() as u64 + 1;
-            let height = (max_y - min_y).abs() as u64 + 1;
+            let width = (max_x - min_x).unsigned_abs() as u64 + 1;
+            let height = (max_y - min_y).unsigned_abs() as u64 + 1;
             (width, height)
         } else {
             (0, 0)

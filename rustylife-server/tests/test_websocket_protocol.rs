@@ -24,13 +24,13 @@ async fn test_websocket_protocol_handshake() {
 
     // Find server executable
     let status = std::process::Command::new("cargo")
-        .args(&["build", "--bin", "rustylife-server"])
+        .args(["build", "--bin", "rustylife-server"])
         .status()
         .expect("Failed to build server");
     assert!(status.success());
 
     let mut server_process = std::process::Command::new("cargo")
-        .args(&["run", "--bin", "rustylife-server", "--", "--port", "9099"]) // Use non-standard port
+        .args(["run", "--bin", "rustylife-server", "--", "--port", "9099"]) // Use non-standard port
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn server");
@@ -103,6 +103,7 @@ async fn test_websocket_protocol_handshake() {
 
     // Cleanup
     let _ = server_process.kill();
+    let _ = server_process.wait();
 
     if timeout.is_err() {
         panic!("Timed out waiting for BinaryStateHeader");

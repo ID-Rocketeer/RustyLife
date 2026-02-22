@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 struct BoundsSubscriber {
+    #[allow(clippy::type_complexity)]
     pub last_bounds: Mutex<Option<((i128, i128), (i128, i128))>>,
 }
 
@@ -82,7 +83,7 @@ fn test_breeder_bounds_regression() {
         let bounds = *subscriber.last_bounds.lock().unwrap();
         if let Some(((_x1, _y1), (_x2, _y2))) = bounds {
             // Relax constraints to see what's happening
-            assert!(success || true);
+            assert!(true);
             success = true;
             break;
         }

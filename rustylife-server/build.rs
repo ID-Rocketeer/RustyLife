@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 fn main() {
     // Rerun this script if the patterns directory changes
     println!("cargo:rerun-if-changed=../rustylife-core/src/patterns");
