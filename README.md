@@ -25,6 +25,11 @@ You need **Rust** installed on your machine.
     - Download the "Visual Studio Build Tools" installer from Microsoft.
     - Select the **"Desktop development with C++"** workload.
     - This is required for the MSVC linker used by Rust on Windows.
+2.  **Install Node.js (for Web GUI testing)**:
+    - Open an Administrator PowerShell and run:
+      ```powershell
+      winget install OpenJS.NodeJS
+      ```
 2.  **Clone the Repository**:
     ```powershell
     git clone https://github.com/ID-Rocketeer/RustyLife.git
@@ -38,6 +43,12 @@ You need **Rust** installed on your machine.
     sudo apt-get update
     sudo apt-get install build-essential pkg-config libssl-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libgtk-3-dev
     ```
+2.  **Install Node.js (for Web GUI testing)**:
+    - The easiest way is via NVM (Node Version Manager) or the Nodesource packages:
+      ```bash
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+      sudo apt-get install -y nodejs
+      ```
 2.  **Clone the Repository**:
     ```bash
     git clone https://github.com/ID-Rocketeer/RustyLife.git
