@@ -3,7 +3,7 @@
 This document tracks future features, investigations, and known issues that have not yet been scheduled, to ensure cross-computer and cross-user visibility.
 
 ## High Priority Bugs
-- [ ] **Web GUI Idle Viewport Updates:** When panning or zooming the viewport while the simulation engine is paused/idle, the Web GUI does not update the display. This makes it very difficult to see changes to the view position.
+- [x] **Web GUI Idle Viewport Updates:** When panning or zooming the viewport while the simulation engine is paused/idle, the Web GUI does not update the display. This makes it very difficult to see changes to the view position.
 
 ## GUI Issues
 - [x] **Investigate Native GUI Termination:** Sometimes the Native GUI client (`rustylife-client`) completely terminates the process when the Quit button is clicked, instead of cleanly stopping the server and exiting. Investigate why this behavior is inconsistent across runs.
@@ -18,7 +18,7 @@ This document tracks future features, investigations, and known issues that have
 
 ## Performance & Telemetry
 - [ ] **Validate GPS Calculation:** Investigate potential discrepancies in Generations Per Second (GPS) reporting at high population counts (e.g., >1M cells, like Breeder 1 at Gen 28k+). The reported GPS (e.g., 2/S or 8.74/S) sometimes appears significantly faster than the actual observed screen update rate, suggesting the metric might be miscalculated, decoupled from the broadcast frequency, or the GUI might be dropping frames.
-- [ ] **Out-Of-Memory Crash Reporter:** Implement a crash handler (e.g., a custom panic hook) that catches inevitable memory exhaustion panics (`STATUS_STACK_BUFFER_OVERRUN` / `Os { code: 1450 }`) on infinitely expanding patterns like "Breeder 1". Upon crashing, the engine should clearly print the last successfully completed telemetry values (Generation, Population, etc.) to the console to inform the user how far the simulation reached.
+- [ ] **Crash Telemetry Reporter:** Install a global `std::panic::set_hook` at server startup that intercepts **all** panics (OOM, bounds, unwrap failures, etc.), prepends the last known telemetry snapshot (Generation, Population, GPS) to the crash output, then forwards to the default panic handler unchanged. This preserves the full backtrace and exit code while ensuring metrics are never lost on crash.
 
 ## GUI Aesthetics & Layout (Native/Network vs Web Parity)
 - [ ] **Fix Native GUI Header Overlap:** Address issues where header elements (title, play controls, population, etc.) misalign and overlap when the native/network GUI window is constrained horizontally. Implement responsive wrapping/reflowing to keep elements visible without collision, matching the Web GUI's behavior.
