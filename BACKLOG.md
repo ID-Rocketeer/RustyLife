@@ -18,7 +18,7 @@ This document tracks future features, investigations, and known issues that have
 
 ## Performance & Telemetry
 - [ ] **Validate GPS Calculation:** Investigate potential discrepancies in Generations Per Second (GPS) reporting at high population counts (e.g., >1M cells, like Breeder 1 at Gen 28k+). The reported GPS (e.g., 2/S or 8.74/S) sometimes appears significantly faster than the actual observed screen update rate, suggesting the metric might be miscalculated, decoupled from the broadcast frequency, or the GUI might be dropping frames.
-- [ ] **Crash Telemetry Reporter:** Install a global `std::panic::set_hook` at server startup that intercepts **all** panics (OOM, bounds, unwrap failures, etc.), prepends the last known telemetry snapshot (Generation, Population, GPS) to the crash output, then forwards to the default panic handler unchanged. This preserves the full backtrace and exit code while ensuring metrics are never lost on crash.
+- [x] **Crash Telemetry Reporter:** Install a global `std::panic::set_hook` at server startup that intercepts **all** panics. Include a custom global allocator wrapper (`OomTelemetryAllocator`) to ensure telemetry (Generation, Population, Bounds, Rates) is captured even during raw Out-Of-Memory exhaustion before the process natively aborts.
 
 ## GUI Aesthetics & Layout (Native/Network vs Web Parity)
 - [ ] **Fix Native GUI Header Overlap:** Address issues where header elements (title, play controls, population, etc.) misalign and overlap when the native/network GUI window is constrained horizontally. Implement responsive wrapping/reflowing to keep elements visible without collision, matching the Web GUI's behavior.

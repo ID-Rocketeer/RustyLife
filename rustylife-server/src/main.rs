@@ -24,7 +24,9 @@ use rustylife_core::{
     space::SimulationSpace,
 };
 use rustylife_gui::{AppState, RustyLifeApp, UserActionHandler};
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -216,6 +218,122 @@ impl UserActionHandler for ServerActionHandler {
     }
 }
 
+static ENGINE_REF: OnceLock<Weak<SimulationEngine>> = OnceLock::new();
+
+struct OomTelemetryAllocator;
+
+unsafe impl GlobalAlloc for OomTelemetryAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { System.alloc(layout) };
+        if ptr.is_null() {
+            oom_crash_report(layout.size());
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { System.alloc_zeroed(layout) };
+        if ptr.is_null() {
+            oom_crash_report(layout.size());
+        }
+        ptr
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
+        if new_ptr.is_null() {
+            oom_crash_report(new_size);
+        }
+        new_ptr
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: OomTelemetryAllocator = OomTelemetryAllocator;
+
+fn oom_crash_report(size: usize) {
+    // Attempt to print the telemetry securely without triggering further panics.
+    // We avoid large standard formatting macros because we are out of memory.
+    eprintln!("\n==================================================");
+    eprintln!("        RUSTYLIFE OUT OF MEMORY CRASH             ");
+    eprintln!("==================================================");
+    eprintln!("FATAL: Failed to allocate {} bytes.", size);
+
+    // We attempt to get the engine and print its state.
+    // By invoking `print_crash_telemetry`, we rely entirely on `eprintln!` which avoids
+    // dynamic heap allocations like `format!()` or `String::new()`. This is critical
+    // because any heap allocation during an OOM handler could deadlock or crash immediately.
+    if let Some(engine_weak) = ENGINE_REF.get() {
+        if let Some(engine) = engine_weak.upgrade() {
+            let _ = write_crash_telemetry(&mut std::io::stderr(), Some(&engine));
+        }
+    }
+    eprintln!("==================================================\n");
+    std::process::abort();
+}
+
+pub fn write_crash_telemetry(
+    mut out: impl std::io::Write,
+    engine: Option<&SimulationEngine>,
+) -> std::io::Result<()> {
+    writeln!(out, "\n==================================================")?;
+    writeln!(out, "              RUSTYLIFE CRASH REPORT              ")?;
+    writeln!(out, "==================================================")?;
+
+    if let Some(engine) = engine {
+        writeln!(out, "Simulation State at Crash:")?;
+        writeln!(out, "  Generation: {}", engine.generation())?;
+        writeln!(
+            out,
+            "  Population: {}",
+            engine.living_count.load(Ordering::Relaxed)
+        )?;
+
+        write!(out, "  Bounds:     ")?;
+        if let Ok(bounds_lock) = engine.current_generation_bounds.try_lock() {
+            if let Some(((min_x, min_y), (max_x, max_y))) = *bounds_lock {
+                writeln!(out, "({}, {}) to ({}, {})", min_x, min_y, max_x, max_y)?;
+            } else {
+                writeln!(out, "None")?;
+            }
+        } else {
+            writeln!(out, "Locked")?;
+        }
+
+        if let Ok(tel) = engine.telemetry.try_lock() {
+            writeln!(out, "  GPS:        {:.2} / s", tel.gps)?;
+            writeln!(out, "  Work Rate:  {:.2} / s", tel.work_rate_ema)?;
+            writeln!(out, "  Net Rate:   {:.2} / s", tel.net_rate_ema)?;
+        } else {
+            writeln!(out, "  GPS:        Locked")?;
+            writeln!(out, "  Work Rate:  Locked")?;
+            writeln!(out, "  Net Rate:   Locked")?;
+        }
+    } else {
+        writeln!(
+            out,
+            "Simulation State at Crash: UNKNOWN (Engine not running or inaccessible)"
+        )?;
+    }
+    Ok(())
+}
+
+fn setup_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let engine = ENGINE_REF.get().and_then(|w| w.upgrade());
+        let _ = write_crash_telemetry(&mut std::io::stderr(), engine.as_deref());
+        eprintln!("--------------------------------------------------");
+        eprintln!("Panic Details:");
+        default_hook(panic_info);
+        eprintln!("==================================================\n");
+    }));
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -235,6 +353,10 @@ fn main() {
         pool_size
     );
     let engine = SimulationEngine::new(space.clone(), pool_size);
+
+    // Set up global crash reporting
+    let _ = ENGINE_REF.set(Arc::downgrade(&engine));
+    setup_panic_hook();
 
     // Load dynamic patterns from "patterns/" directory
     println!("Loading patterns from ./patterns directory...");
@@ -707,5 +829,81 @@ async fn handle_get_state(
         Err(e) => {
             Response::Error(format!("Failed to decode snapshot for filtering: {}", e)).to_bytes()
         }
+    }
+}
+
+#[cfg(test)]
+mod crash_telemetry_tests {
+    use super::*;
+    use rustylife_core::space::SimulationSpace;
+
+    // Helper macro to easily capture the engine state into a String via our std::io::Write trait proxy
+    fn capture_report(engine: Option<&SimulationEngine>) -> String {
+        let mut buffer = Vec::new();
+        write_crash_telemetry(&mut buffer, engine).unwrap();
+        String::from_utf8(buffer).unwrap()
+    }
+
+    #[test]
+    fn test_format_crash_telemetry_none() {
+        let report = capture_report(None);
+        println!("{}", report);
+        assert!(report.contains("RUSTYLIFE CRASH REPORT"));
+        assert!(report.contains("UNKNOWN"));
+    }
+
+    #[test]
+    fn test_format_crash_telemetry_some() {
+        let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+        let engine = SimulationEngine::new(space.clone(), 1);
+
+        // Manipulate engine state
+        engine.generation.store(42, Ordering::SeqCst);
+        engine.living_count.store(100, Ordering::SeqCst);
+        *engine.current_generation_bounds.lock().unwrap() = Some(((-10, -5), (10, 5)));
+
+        {
+            let mut tel = engine.telemetry.lock().unwrap();
+            tel.gps = 12.34;
+            tel.work_rate_ema = 56.78;
+            tel.net_rate_ema = 90.12;
+        }
+
+        let report = capture_report(Some(&engine));
+        println!("{}", report);
+        assert!(report.contains("Generation: 42"));
+        assert!(report.contains("Population: 100"));
+        assert!(report.contains("Bounds:     (-10, -5) to (10, 5)"));
+        assert!(report.contains("GPS:        12.34 / s"));
+        assert!(report.contains("Work Rate:  56.78 / s"));
+        assert!(report.contains("Net Rate:   90.12 / s"));
+
+        engine.shutdown();
+    }
+
+    #[test]
+    fn test_format_crash_telemetry_locked() {
+        let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+        let engine = SimulationEngine::new(space.clone(), 1);
+
+        engine.generation.store(42, Ordering::SeqCst);
+        engine.living_count.store(100, Ordering::SeqCst);
+
+        // Explicitly lock the mutexes and keep them locked during the formatter call!
+        let _tel_lock = engine.telemetry.lock().unwrap();
+        let _bounds_lock = engine.current_generation_bounds.lock().unwrap();
+
+        let report = capture_report(Some(&engine));
+        println!("{}", report);
+        assert!(report.contains("Generation: 42"));
+        assert!(report.contains("Population: 100"));
+        assert!(report.contains("Bounds:     Locked"));
+        assert!(report.contains("GPS:        Locked"));
+        assert!(report.contains("Work Rate:  Locked"));
+        assert!(report.contains("Net Rate:   Locked"));
+
+        drop(_tel_lock);
+        drop(_bounds_lock);
+        engine.shutdown();
     }
 }

@@ -71,15 +71,11 @@ mod tests {
 
         // Died: (1,1) and (1,3). Count = 2.
         assert_eq!(died, 2, "Died count should be 2");
-
-        // Work = Union. Old (3) | New (3). Total 5 distinct pixels?
-        // Work = Union. Old (3) | New (3). Total 5 distinct pixels?
-        // Vertical: (1,1), (1,2), (1,3).
-        // Horizontal: (0,2), (1,2), (2,2).
-        // Union: (1,1), (1,2), (1,3), (0,2), (2,2). 5 pixels.
-        // Wait, (1,2) overlaps.
-        assert_eq!(work, 5, "Work should be 5 (Union of inputs and outputs)");
-        assert!(!is_dead);
+        assert_eq!(
+            work, 64,
+            "Work should be 64 since the SIMD kernel evaluates the whole block unconditionally"
+        );
+        assert!(!is_dead, "Is_dead should be false");
 
         // Expect Horizontal line in Mask 2 (Index 1)
         // (0, 2), (1, 2), (2, 2)
