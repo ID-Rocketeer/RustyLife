@@ -38,8 +38,8 @@ async fn mock_server_ipc(stream: TcpStream, engine: Arc<SimulationEngine>) {
                 Request::GetState { generation, .. } => {
                     // Ack with SnapshotAvailable for test
                     let resp = Response::SnapshotAvailable {
-                        generation,
                         telemetry: rustylife_core::Telemetry {
+                            generation: generation,
                             population: 0,
                             is_running: true,
                             gps: 0.0,

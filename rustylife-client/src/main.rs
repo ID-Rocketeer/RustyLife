@@ -122,11 +122,11 @@ async fn main() -> anyhow::Result<()> {
                                         s.cores = cores;
                                         s.patterns = patterns;
                                     }
-                                    rustylife_core::Response::SnapshotAvailable { generation, telemetry } => {
-                                        latest_generation = generation;
+                                    rustylife_core::Response::SnapshotAvailable { telemetry } => {
+                                        latest_generation = telemetry.generation;
 
                                         // Store in ring buffer for later atomic update with cells
-                                        telemetry_cache[(generation % 256) as usize] = Some(telemetry);
+                                        telemetry_cache[(telemetry.generation % 256) as usize] = Some(telemetry);
 
                                         // We can still update bounds immediately if we want "predicted" bounds,
                                         // or wait for the sync. User specified atomic update.
@@ -137,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
                                             let viewport = {
                                                 state_clone.lock().unwrap().target_viewport
                                             };
-                                            let req = Request::GetState { generation, viewport };
+                                            let req = Request::GetState { generation: telemetry.generation, viewport };
                                             let _ = writer.write_all(&req.to_bytes()).await;
                                             pending_request = true;
                                         } else {

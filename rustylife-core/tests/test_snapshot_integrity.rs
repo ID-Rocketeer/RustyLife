@@ -13,9 +13,8 @@ struct IntegritySubscriber {
 impl EngineSubscriber for IntegritySubscriber {
     fn on_snapshot_available(
         &self,
-        generation: u64,
         data: Arc<Vec<u8>>,
-        _telemetry: rustylife_core::Telemetry,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
         match rustylife_core::decode_binary_packet(&data) {
             Ok(packet) => {
@@ -26,14 +25,17 @@ impl EngineSubscriber for IntegritySubscriber {
                 if reported_count != actual_count {
                     eprintln!(
                         "\n!!! INTEGRITY FAILURE at Gen {}: Header says {} records, Payload has {} !!!\n",
-                        generation, reported_count, actual_count
+                        telemetry.generation, reported_count, actual_count
                     );
                     self.failure_detected.store(true, Ordering::SeqCst);
                     return false; // Stop receiving updates
                 }
             }
             Err(e) => {
-                eprintln!("\n!!! DECODE FAILURE at Gen {}: {} !!!\n", generation, e);
+                eprintln!(
+                    "\n!!! DECODE FAILURE at Gen {}: {} !!!\n",
+                    telemetry.generation, e
+                );
                 self.failure_detected.store(true, Ordering::SeqCst);
                 return false;
             }

@@ -70,17 +70,17 @@ async fn test_websocket_protocol_handshake() {
                 // Decode output
                 if let Ok((response, _)) = Response::from_bytes(&data) {
                     match response {
-                        Response::SnapshotAvailable { generation, .. } => {
+                        Response::SnapshotAvailable { telemetry, .. } => {
                             // The original request was to add a redundant check here.
                             // Assuming the intent was to ensure the 'generation' field is correctly extracted.
                             // The original code used `g` for generation, now it's `generation`.
-                            println!("Received SnapshotAvailable: {}", generation);
-                            received_generations.push(generation);
+                            println!("Received SnapshotAvailable: {}", telemetry.generation);
+                            received_generations.push(telemetry.generation);
 
                             // If we see progress, we can request data
-                            if generation > 0 {
+                            if telemetry.generation > 0 {
                                 let get_req = Request::GetState {
-                                    generation: generation,
+                                    generation: telemetry.generation,
                                     viewport: None,
                                 };
                                 write

@@ -11,7 +11,6 @@ struct BoundsSubscriber {
 impl EngineSubscriber for BoundsSubscriber {
     fn on_snapshot_available(
         &self,
-        _generation: u64,
         _data: Arc<Vec<u8>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {

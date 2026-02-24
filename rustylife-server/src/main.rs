@@ -78,14 +78,10 @@ pub struct ServerEngineSubscriber {
 impl EngineSubscriber for ServerEngineSubscriber {
     fn on_snapshot_available(
         &self,
-        generation: u64,
         _data: Arc<Vec<u8>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        let resp = Response::SnapshotAvailable {
-            generation,
-            telemetry,
-        };
+        let resp = Response::SnapshotAvailable { telemetry };
         let _ = self.tx.send(resp);
         true
     }
@@ -99,12 +95,14 @@ pub struct BenchmarkSubscriber {
 impl EngineSubscriber for BenchmarkSubscriber {
     fn on_snapshot_available(
         &self,
-        generation: u64,
         _data: Arc<Vec<u8>>,
-        _telemetry: rustylife_core::Telemetry,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        if generation >= self.target_generation {
-            println!("Reached target generation {}. Exiting...", generation);
+        if telemetry.generation >= self.target_generation {
+            println!(
+                "Reached target generation {}. Exiting...",
+                telemetry.generation
+            );
             std::process::exit(0);
         }
         true
@@ -119,7 +117,6 @@ struct PresenterSubscriber {
 impl EngineSubscriber for PresenterSubscriber {
     fn on_snapshot_available(
         &self,
-        _generation: u64,
         data: Arc<Vec<u8>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
@@ -534,6 +531,7 @@ fn make_snapshot_response(engine: &SimulationEngine) -> Response {
     let bounds = to_cartesian_bounds(engine.space.bounds());
 
     let telemetry = Telemetry {
+        generation: engine.generation(),
         population: engine.living_count.load(Ordering::Relaxed),
         is_running: !engine.stopping.load(Ordering::Relaxed),
         gps,
@@ -542,10 +540,7 @@ fn make_snapshot_response(engine: &SimulationEngine) -> Response {
         bounds,
     };
 
-    Response::SnapshotAvailable {
-        generation: engine.generation(),
-        telemetry,
-    }
+    Response::SnapshotAvailable { telemetry }
 }
 
 // Handlers

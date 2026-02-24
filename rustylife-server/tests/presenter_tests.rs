@@ -29,7 +29,6 @@ pub struct PresenterSubscriber {
 impl EngineSubscriber for PresenterSubscriber {
     fn on_snapshot_available(
         &self,
-        _generation: u64,
         data: Arc<Vec<u8>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {

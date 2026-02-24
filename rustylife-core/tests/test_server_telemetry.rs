@@ -10,14 +10,15 @@ struct TelemetrySubscriber {
 impl EngineSubscriber for TelemetrySubscriber {
     fn on_snapshot_available(
         &self,
-        _generation: u64,
         data: Arc<Vec<u8>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        // Decode packet ONLY to verify it still parses
-        if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
+        // Decode packet to verify it still parses — only record telemetry if the
+        // binary payload is intact. This keeps the implicit integrity check from
+        // the original test: a corrupt packet will fail to push, causing a timeout.
+        if rustylife_core::decode_binary_packet(&data).is_ok() {
             self.packets.lock().unwrap().push((
-                packet.generation,
+                telemetry.generation,
                 telemetry.work_rate,
                 telemetry.net_rate,
             ));

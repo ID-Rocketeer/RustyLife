@@ -320,12 +320,11 @@ struct CompletionTracker {
 impl EngineSubscriber for CompletionTracker {
     fn on_snapshot_available(
         &self,
-        generation: u64,
         _data: Arc<Vec<u8>>,
-        _telemetry: rustylife_core::Telemetry,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
         self.current.fetch_add(1, Ordering::SeqCst);
-        if generation >= self.limit {
+        if telemetry.generation >= self.limit {
             self.stop_signal.store(true, Ordering::SeqCst);
         }
         true

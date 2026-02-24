@@ -91,15 +91,18 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
         )
         .await??;
         match resp {
-            rustylife_core::Response::SnapshotAvailable { generation, .. } => {
-                println!("Received SnapshotAvailable for generation: {}", generation);
-                if generation == 0 {
+            rustylife_core::Response::SnapshotAvailable { telemetry } => {
+                println!(
+                    "Received SnapshotAvailable for generation: {}",
+                    telemetry.generation
+                );
+                if telemetry.generation == 0 {
                     found_gen_0 = true;
                     // Trigger first step
                     writer
                         .write_all(&rustylife_core::Request::NextStep.to_bytes())
                         .await?;
-                } else if generation > 0 {
+                } else if telemetry.generation > 0 {
                     found_next_gen = true;
                     break;
                 }

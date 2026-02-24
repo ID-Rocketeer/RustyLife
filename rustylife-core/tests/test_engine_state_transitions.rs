@@ -99,12 +99,34 @@ fn test_gui_workflow_state_management() {
     }
     assert!(!engine.is_stopped(), "Engine should be RUNNING");
 
-    // 5. Reset
+    // 5. Stop before Reset — Reset is dropped while running (mirrors UI behaviour;
+    // both clients disable the Reset button while running)
+    engine.stop();
+    let start_stop = std::time::Instant::now();
+    while !engine.is_stopped() {
+        if start_stop.elapsed().as_secs() > 2 {
+            panic!("Timed out waiting for engine to stop before reset");
+        }
+        std::thread::yield_now();
+    }
+
+    // 6. Reset
     engine.reset();
     let start_4 = std::time::Instant::now();
-    while !engine.is_stopped() {
+    loop {
+        let stopped = engine.is_stopped();
+        let curr_gen = engine.generation();
+        let pop = engine.living_count.load(Ordering::SeqCst);
+        // curr_gen==0 is the only discriminating condition: after stop() alone,
+        // generation is still > 0. Only a completed reset sets it back to 0.
+        if stopped && curr_gen == 0 && pop == 5 {
+            break;
+        }
         if start_4.elapsed().as_secs() > 2 {
-            panic!("Timed out waiting for Engine Reset (Stop)");
+            panic!(
+                "Timed out waiting for Engine Reset (stopped={}, gen={}, pop={})",
+                stopped, curr_gen, pop
+            );
         }
         std::thread::yield_now();
     }

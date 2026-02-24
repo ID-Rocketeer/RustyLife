@@ -47,6 +47,7 @@ pub enum Request {
 /// Shared telemetry metrics for all interfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Telemetry {
+    pub generation: u64,
     pub population: u64,
     pub is_running: bool,
     pub gps: f64,
@@ -73,7 +74,7 @@ pub enum Response {
     Ok,
     /// Notification that a new snapshot is available with full telemetry.
     SnapshotAvailable {
-        generation: u64,
+        // generation: u64, // TODO: Remove since it's in telemetry
         telemetry: Telemetry,
     },
     /// A generic error message.

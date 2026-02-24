@@ -89,7 +89,7 @@ pub struct SnapshotRecord {
 pub trait EngineSubscriber: Send + Sync {
     fn on_snapshot_available(
         &self,
-        generation: u64,
+        // generation: u64,
         data: Arc<Vec<u8>>,
         telemetry: crate::Telemetry,
     ) -> bool;
@@ -351,14 +351,9 @@ impl Engine {
         self.subscribers.lock().unwrap().push(subscriber);
     }
 
-    pub fn notify_subscribers(
-        &self,
-        generation: u64,
-        packet: Arc<Vec<u8>>,
-        telemetry: crate::Telemetry,
-    ) {
+    pub fn notify_subscribers(&self, packet: Arc<Vec<u8>>, telemetry: crate::Telemetry) {
         let mut subscribers = self.subscribers.lock().unwrap();
-        subscribers.retain(|sub| sub.on_snapshot_available(generation, packet.clone(), telemetry));
+        subscribers.retain(|sub| sub.on_snapshot_available(packet.clone(), telemetry));
     }
 
     // Legacy methods usually expected by main.rs / tests
@@ -503,6 +498,24 @@ impl Engine {
                 Self::handle_transition(engine, &task);
             }
             Tasks::Reset => {
+                // Part 1: Drop if engine is actively running.
+                // `stopping == false` means new generations are being initiated.
+                // Both UI clients already gate the Reset button while running;
+                // this is the engine-level enforcement of the same contract.
+                if !engine.stopping.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                // Part 2: Requeue if commit workers from the last generation are
+                // still in-flight. `stopping == true` is an intent flag, NOT a
+                // quiescence guarantee — CommitBatch tasks may still be running
+                // and updating living_count via fetch_add/fetch_sub. We must be
+                // the sole running task before touching any shared state.
+                if engine.work_queue.in_flight_count.load(Ordering::SeqCst) > 1 {
+                    engine.work_queue.enqueue(Tasks::Reset);
+                    return;
+                }
+
                 engine.space.clear();
                 engine.generation.store(0, Ordering::SeqCst);
 
@@ -521,6 +534,7 @@ impl Engine {
 
                 Self::capture_state(engine, false);
             }
+
             Tasks::Stop => {
                 engine.stopping.store(true, Ordering::SeqCst);
             }
@@ -970,6 +984,8 @@ impl Engine {
 
     fn capture_state(engine: &Arc<Self>, is_running: bool) {
         let generation = engine.generation.load(Ordering::SeqCst);
+        let work = engine.work.load(Ordering::SeqCst); // Accumulator
+        let net = engine.net.load(Ordering::SeqCst);
 
         // Check for Pruning Trigger
         let dead_blocks = engine.dead_block_count.load(Ordering::SeqCst);
@@ -979,9 +995,6 @@ impl Engine {
             // Reset dead block count
             engine.dead_block_count.store(0, Ordering::SeqCst);
         }
-
-        let work = engine.work.load(Ordering::SeqCst); // Accumulator
-        let net = engine.net.load(Ordering::SeqCst);
 
         // Update Telemetry
         engine
@@ -1018,6 +1031,7 @@ impl Engine {
         };
         let bounds = *engine.current_generation_bounds.lock().unwrap();
         let telemetry = crate::Telemetry {
+            generation,
             population: living_count as u64,
             is_running,
             gps,
@@ -1053,7 +1067,7 @@ impl Engine {
             engine.snapshots.insert(generation, packet.clone());
 
             // Notify
-            engine.notify_subscribers(generation, packet, telemetry);
+            engine.notify_subscribers(packet, telemetry);
 
             // Recycle memory block
             cells.clear();

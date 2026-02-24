@@ -38,12 +38,11 @@ impl TestSync {
 impl EngineSubscriber for TestSync {
     fn on_snapshot_available(
         &self,
-        generation: u64,
         _data: Arc<Vec<u8>>,
-        _telemetry: rustylife_core::Telemetry,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let mut guard = self.state.lock().unwrap();
-        guard.0 = generation;
+        guard.0 = telemetry.generation;
         self.cond.notify_all();
         true
     }
