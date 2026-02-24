@@ -15,11 +15,11 @@ struct GenerationTracker {
 impl EngineSubscriber for GenerationTracker {
     fn on_snapshot_available(
         &self,
-        generation: u64,
-        _data: Arc<Vec<u8>>,
+        _generation: u64,
+        data: Arc<Vec<u8>>,
         _telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        if !_data.is_empty() {
+        if !data.is_empty() {
             let prev = self.current.fetch_add(1, Ordering::SeqCst);
             if prev + 1 >= self.target {
                 let _ = self.tx.send(());
