@@ -116,3 +116,96 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_missing_snapshot_returns_ok() -> anyhow::Result<()> {
+    // Start the server
+    let server = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rustylife-server",
+            "--",
+            "--port",
+            "8082",
+            "--ipc-port",
+            "9003",
+        ])
+        .spawn()?;
+
+    let _guard = ServerGuard(server);
+
+    // Wait for server
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if TcpStream::connect("127.0.0.1:9003").await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("Server failed to start"))?;
+
+    let stream = TcpStream::connect("127.0.0.1:9003").await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buffer = Vec::new();
+    let mut offset = 0;
+
+    // 1. Drain initial Welcome + SnapshotAvailable
+    for _ in 0..2 {
+        let _ = timeout(
+            Duration::from_secs(5),
+            read_response_headless(&mut reader, &mut buffer, &mut offset),
+        )
+        .await??;
+    }
+
+    // 2. Request a generation that definitely doesn't exist (999,999)
+    println!("Requesting non-existent generation 999999...");
+    let req = rustylife_core::Request::GetState {
+        generation: 999_999,
+        viewport: None,
+    };
+    writer.write_all(&req.to_bytes()).await?;
+
+    // 3. Verify server returns Response::Ok instead of Response::Error
+    let resp = timeout(
+        Duration::from_secs(5),
+        read_response_headless(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+
+    assert_eq!(
+        resp,
+        rustylife_core::Response::Ok,
+        "Server should return Ok (not Error) for missing snapshots"
+    );
+
+    Ok(())
+}
+
+// Minimal helper for the new test case
+async fn read_response_headless(
+    reader: &mut tokio::net::tcp::OwnedReadHalf,
+    buffer: &mut Vec<u8>,
+    offset: &mut usize,
+) -> anyhow::Result<rustylife_core::Response> {
+    loop {
+        if *offset >= 4 {
+            let len = u32::from_le_bytes(buffer[0..4].try_into().unwrap()) as usize;
+            if *offset >= 4 + len {
+                let (resp, consumed) = rustylife_core::Response::from_bytes(&buffer[0..*offset])
+                    .map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+                buffer.drain(0..consumed);
+                *offset -= consumed;
+                return Ok(resp);
+            }
+        }
+        let n = reader.read_buf(buffer).await?;
+        if n == 0 {
+            return Err(anyhow::anyhow!("EOF"));
+        }
+        *offset += n;
+    }
+}

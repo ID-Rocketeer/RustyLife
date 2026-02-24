@@ -760,11 +760,10 @@ async fn handle_get_state(
     let snapshot = state.engine.snapshots.get(generation);
 
     if snapshot.is_none() {
-        return Response::Error(format!(
-            "Snapshot for generation {} not found in memory (too old or not yet generated)",
-            generation
-        ))
-        .to_bytes();
+        // Return Ok as a silent signal that no data is available for this generation.
+        // This prevents console spam in clients during UI events (zoom/pan) while
+        // also allowing the client to clear its 'pending_request' flag.
+        return Response::Ok.to_bytes();
     }
 
     let data = snapshot.unwrap();

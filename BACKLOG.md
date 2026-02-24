@@ -10,7 +10,7 @@ This document tracks future features, investigations, and known issues that have
 - [ ] **Investigate Native GUI Zoom Invariance:** Verify that the zoom-in/out buttons in the native and network GUIs accurately preserve the center coordinates when zooming. (This was a bug recently identified and fixed in the Web GUI's `dashboard.js`).
 - [ ] **Standardize Zoom Buttons:** Make zoom buttons uniformly use "+" and "-" across both Native/Network and Web GUIs, and add descriptive tooltips to them.
 - [ ] **Fix Native GUI Pattern Button Height:** Ensure the "Patterns" dropdown button in the native GUI matches the vertical height of adjacent buttons (like the play controls or Origin button).
-- [ ] **Suppress Client Console Spam:** Clean up the network client's request logic to prevent continuous "Server Error: Snapshot for generation 0 not found in memory" messages from spamming the console when the window is scaled or repositioned with no pattern loaded.
+- [x] **Suppress Client Console Spam:** Clean up the network client's request logic to prevent continuous "Server Error: Snapshot for generation 0 not found in memory" messages from spamming the console when the window is scaled or repositioned with no pattern loaded.
 - [ ] **Web GUI Viewport Width Constraints:** Investigate an issue where the simulation canvas/viewport fails to expand to the full width of the screen on certain external displays, leaving unrendered margins (approx. 1") on the left and right, even though the header and footer divs correctly utilize the full horizontal resolution.
 
 ## Architecture & Testing

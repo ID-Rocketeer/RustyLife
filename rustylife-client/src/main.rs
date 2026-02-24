@@ -157,12 +157,22 @@ async fn main() -> anyhow::Result<()> {
 
                                             // Synchronize with cached telemetry
                                             let idx = (packet.generation % 256) as usize;
-                                            if let Some(telemetry) = telemetry_cache[idx].take() {
-                                                s.update_state(packet, telemetry);
+                                            if let Some(telemetry) = telemetry_cache[idx].as_ref() {
+                                                if telemetry.generation == packet.generation {
+                                                    s.update_state(packet, *telemetry);
+                                                } else {
+                                                    // Stale telemetry from a past generation cycle (256 steps ago)
+                                                    if packet.generation > 0 {
+                                                        println!("Warning: Telemetry cache generation mismatch (Expected {}, found {})", packet.generation, telemetry.generation);
+                                                    }
+                                                }
                                             } else {
                                                 // Fallback if telemetry announcement was missed/dropped
-                                                // (Shouldn't happen on reliable TCP, but for robustness)
-                                                println!("Warning: No cached telemetry for Gen {}", packet.generation);
+                                                // (Shouldn't happen on reliable TCP, but for robustness).
+                                                // Silence this for Gen 0 to avoid boatload of startup/reset spam.
+                                                if packet.generation > 0 {
+                                                    println!("Warning: No cached telemetry for Gen {}", packet.generation);
+                                                }
                                             }
                                         }
 
@@ -179,15 +189,15 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     }
                                     rustylife_core::Response::Error(msg) => {
-                                        println!("Server Error: {}", msg);
+                                        // Ignore 'not found' errors (though server now sends Ok)
+                                        if !msg.contains("not found") {
+                                            println!("Server Error: {}", msg);
+                                        }
                                         pending_request = false;
                                     }
-                                    _ => {
-                                        // Catch-all for other messages (e.g. Ok) that shouldn't lock us up
-                                        if pending_request {
-                                            println!("Received unexpected non-binary response while pending, clearing flag.");
-                                            pending_request = false;
-                                        }
+                                    rustylife_core::Response::Ok => {
+                                        // Silent No-Op (e.g. from GetState on a missing snapshot)
+                                        pending_request = false;
                                     }
                                 }
                             }

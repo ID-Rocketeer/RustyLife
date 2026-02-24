@@ -371,6 +371,10 @@ function connect() {
                 });
             }
 
+        } else if (header.type === "Ok") {
+            // Silent No-Op (e.g. from GetState on a missing snapshot)
+            pendingRequest = false;
+            nextRequestPending = false;
         } else if (header.type === "BinaryStateHeader") {
             pendingRequest = false;
 
