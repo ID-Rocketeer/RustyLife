@@ -13,13 +13,9 @@ impl EngineSubscriber for BoundsSubscriber {
         &self,
         _generation: u64,
         _data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        *self.last_bounds.lock().unwrap() = bounds;
+        *self.last_bounds.lock().unwrap() = telemetry.bounds;
         true
     }
 }
@@ -63,11 +59,11 @@ fn test_breeder_bounds_regression() {
             // Since I'm testing Engine directly, I expect raw bounds FROM SimulationSpace::bounds()
             // because I haven't moved the Cartesian transformation into the Engine yet.
 
-            // Expected Raw bounds (Internal top-down): ((0, 0), (748, 337))
+            // Expected Cartesian bounds: ((0, -337), (748, 0))
             assert_eq!(x1, 0);
-            assert_eq!(y1, 0);
+            assert_eq!(y1, -337);
             assert_eq!(x2, 748);
-            assert_eq!(y2, 337);
+            assert_eq!(y2, 0);
             success = true;
             break;
         }

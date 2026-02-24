@@ -55,6 +55,17 @@ pub struct Telemetry {
     pub bounds: Option<((i128, i128), (i128, i128))>,
 }
 
+impl Telemetry {
+    pub fn to_cartesian_bounds(
+        bounds: Option<((i128, i128), (i128, i128))>,
+    ) -> Option<((i128, i128), (i128, i128))> {
+        bounds.map(|((min_x, min_y), (max_x, max_y))| {
+            // Invert Y axes since internal storage is Y-down
+            ((min_x, -max_y), (max_x, -min_y))
+        })
+    }
+}
+
 /// Represents a response from the simulation server to a client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]

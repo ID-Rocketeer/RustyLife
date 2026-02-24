@@ -12,18 +12,15 @@ impl EngineSubscriber for TelemetrySubscriber {
         &self,
         _generation: u64,
         data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        work_rate: f64,
-        net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
         // Decode packet ONLY to verify it still parses
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
-            self.packets
-                .lock()
-                .unwrap()
-                .push((packet.generation, work_rate, net_rate));
+            self.packets.lock().unwrap().push((
+                packet.generation,
+                telemetry.work_rate,
+                telemetry.net_rate,
+            ));
         }
         true // Keep running
     }

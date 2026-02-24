@@ -178,9 +178,10 @@ impl Block8x8 {
         // Died: Alive in CURRENT but NOT in NEXT
         let died = (center & !next_state).count_ones() as u8;
 
-        // Work = Union of all 3 buffers (Current | Last | Next)
-        let work = (self.boards[0] | self.boards[1] | self.boards[2]).count_ones() as u8;
-        let is_dead = work == 0;
+        // Work: A block is 8x8 (64 cells). Since we processes the entire block via SIMD,
+        // the CPU does exactly 64 cells worth of work whenever this function is called.
+        let work = 64;
+        let is_dead = self.boards[0] == 0 && self.boards[1] == 0 && self.boards[2] == 0;
 
         (pop, born, died, work, is_dead)
     }

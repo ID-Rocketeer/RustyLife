@@ -25,13 +25,9 @@ struct GenerationTracker {
 impl EngineSubscriber for GenerationTracker {
     fn on_snapshot_available(
         &self,
-        _generation: u64,
+        generation: u64,
         _data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         // The `current` field is still used for tracking progress for bail-out calculation,
         // but the primary stop condition now uses `generation`.

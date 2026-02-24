@@ -322,11 +322,7 @@ impl EngineSubscriber for CompletionTracker {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         self.current.fetch_add(1, Ordering::SeqCst);
         if generation >= self.limit {

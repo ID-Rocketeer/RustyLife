@@ -15,11 +15,7 @@ impl EngineSubscriber for IntegritySubscriber {
         &self,
         generation: u64,
         data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         match rustylife_core::decode_binary_packet(&data) {
             Ok(packet) => {

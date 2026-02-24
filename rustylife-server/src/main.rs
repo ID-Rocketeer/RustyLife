@@ -80,24 +80,8 @@ impl EngineSubscriber for ServerEngineSubscriber {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
-        is_running: bool,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
-        bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        let population = self
-            .engine
-            .living_count
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let telemetry = Telemetry {
-            population,
-            is_running,
-            gps,
-            work_rate,
-            net_rate,
-            bounds: to_cartesian_bounds(bounds),
-        };
         let resp = Response::SnapshotAvailable {
             generation,
             telemetry,
@@ -117,11 +101,7 @@ impl EngineSubscriber for BenchmarkSubscriber {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         if generation >= self.target_generation {
             println!("Reached target generation {}. Exiting...", generation);
@@ -134,7 +114,6 @@ impl EngineSubscriber for BenchmarkSubscriber {
 /// 2. Presenter Subscriber: Forwards simulation updates to a presenter (e.g. Server GUI or IPC)
 struct PresenterSubscriber {
     presenter: Arc<Mutex<dyn SimulationPresenter>>,
-    engine: Arc<SimulationEngine>, // Added for telemetry context
 }
 
 impl EngineSubscriber for PresenterSubscriber {
@@ -142,26 +121,10 @@ impl EngineSubscriber for PresenterSubscriber {
         &self,
         _generation: u64,
         data: Arc<Vec<u8>>,
-        is_running: bool,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
-        bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
-
-            // Reconstruct telemetry for internal GUI
-            let population = self.engine.living_count.load(Ordering::Relaxed);
-            let telemetry = Telemetry {
-                population,
-                is_running,
-                gps,
-                work_rate,
-                net_rate,
-                bounds: to_cartesian_bounds(bounds),
-            };
-
             presenter.update_state(packet, telemetry);
         }
         true
@@ -267,10 +230,10 @@ fn oom_crash_report(size: usize) {
     // By invoking `print_crash_telemetry`, we rely entirely on `eprintln!` which avoids
     // dynamic heap allocations like `format!()` or `String::new()`. This is critical
     // because any heap allocation during an OOM handler could deadlock or crash immediately.
-    if let Some(engine_weak) = ENGINE_REF.get() {
-        if let Some(engine) = engine_weak.upgrade() {
-            let _ = write_crash_telemetry(&mut std::io::stderr(), Some(&engine));
-        }
+    if let Some(engine_weak) = ENGINE_REF.get()
+        && let Some(engine) = engine_weak.upgrade()
+    {
+        let _ = write_crash_telemetry(&mut std::io::stderr(), Some(&engine));
     }
     eprintln!("==================================================\n");
     std::process::abort();
@@ -383,7 +346,6 @@ fn main() {
         let gui_presenter = Arc::clone(&state) as Arc<Mutex<dyn SimulationPresenter>>;
         engine.add_subscriber(Arc::new(PresenterSubscriber {
             presenter: gui_presenter,
-            engine: engine.clone(),
         }));
         Some(state)
     } else {

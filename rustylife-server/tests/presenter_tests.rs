@@ -31,22 +31,10 @@ impl EngineSubscriber for PresenterSubscriber {
         &self,
         _generation: u64,
         data: Arc<Vec<u8>>,
-        is_running: bool,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
-        bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: rustylife_core::Telemetry,
     ) -> bool {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
-            let telemetry = Telemetry {
-                population: 0, // Mock for test
-                is_running,
-                gps,
-                work_rate,
-                net_rate,
-                bounds,
-            };
             presenter.update_state(packet, telemetry);
         }
         true

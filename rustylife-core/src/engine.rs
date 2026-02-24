@@ -75,9 +75,7 @@ pub enum IoTask {
     Snapshot {
         generation: u64,
         cells: Vec<((i128, i128), u8)>,
-        is_running: bool,
-        work: u64,
-        net: i64,
+        telemetry: crate::Telemetry,
     },
 }
 
@@ -89,16 +87,11 @@ pub struct SnapshotRecord {
 }
 
 pub trait EngineSubscriber: Send + Sync {
-    #[allow(clippy::too_many_arguments)]
     fn on_snapshot_available(
         &self,
         generation: u64,
         data: Arc<Vec<u8>>,
-        is_running: bool,
-        gps: f64,
-        work_rate: f64,
-        net_rate: f64,
-        bounds: Option<((i128, i128), (i128, i128))>,
+        telemetry: crate::Telemetry,
     ) -> bool;
 }
 
@@ -358,25 +351,14 @@ impl Engine {
         self.subscribers.lock().unwrap().push(subscriber);
     }
 
-    pub fn notify_subscribers(&self, generation: u64, packet: Arc<Vec<u8>>, is_running: bool) {
-        let (gps, work, net) = {
-            let t = self.telemetry.lock().unwrap();
-            (t.gps, t.work_rate_ema, t.net_rate_ema)
-        };
-        let bounds = *self.current_generation_bounds.lock().unwrap();
-
+    pub fn notify_subscribers(
+        &self,
+        generation: u64,
+        packet: Arc<Vec<u8>>,
+        telemetry: crate::Telemetry,
+    ) {
         let mut subscribers = self.subscribers.lock().unwrap();
-        subscribers.retain(|sub| {
-            sub.on_snapshot_available(
-                generation,
-                packet.clone(),
-                is_running,
-                gps,
-                work,
-                net,
-                bounds,
-            )
-        });
+        subscribers.retain(|sub| sub.on_snapshot_available(generation, packet.clone(), telemetry));
     }
 
     // Legacy methods usually expected by main.rs / tests
@@ -1029,13 +1011,26 @@ impl Engine {
 
         engine.space.collect_all_states_into(&mut vec);
 
+        // Capture telemetry synchronously
+        let (gps, work_rate, net_rate) = {
+            let t = engine.telemetry.lock().unwrap();
+            (t.gps, t.work_rate_ema, t.net_rate_ema)
+        };
+        let bounds = *engine.current_generation_bounds.lock().unwrap();
+        let telemetry = crate::Telemetry {
+            population: living_count as u64,
+            is_running,
+            gps,
+            work_rate,
+            net_rate,
+            bounds: crate::Telemetry::to_cartesian_bounds(bounds),
+        };
+
         // Fire to async I/O worker
         let _ = engine.io_tx.send(IoTask::Snapshot {
             generation,
             cells: vec,
-            is_running,
-            work,
-            net,
+            telemetry,
         });
     }
 
@@ -1047,9 +1042,7 @@ impl Engine {
         while let Ok(IoTask::Snapshot {
             generation,
             mut cells,
-            is_running,
-            work: _, // work/net currently not used locally by io thread, but passed for future
-            net: _,
+            telemetry,
         }) = io_rx.recv()
         {
             // Serialize
@@ -1060,7 +1053,7 @@ impl Engine {
             engine.snapshots.insert(generation, packet.clone());
 
             // Notify
-            engine.notify_subscribers(generation, packet, is_running);
+            engine.notify_subscribers(generation, packet, telemetry);
 
             // Recycle memory block
             cells.clear();

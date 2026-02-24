@@ -40,11 +40,7 @@ impl EngineSubscriber for TestSync {
         &self,
         generation: u64,
         _data: Arc<Vec<u8>>,
-        _is_running: bool,
-        _gps: f64,
-        _work_rate: f64,
-        _net_rate: f64,
-        _bounds: Option<((i128, i128), (i128, i128))>,
+        _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let mut guard = self.state.lock().unwrap();
         guard.0 = generation;
