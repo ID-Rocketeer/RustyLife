@@ -28,12 +28,7 @@ fn test_cross_boundary_block() {
     let cells = vec![(7, 7), (8, 7), (7, 8), (8, 8)];
 
     for (x, y) in &cells {
-        space.storage().insert(rustylife_core::cell::Cell::new(
-            *x,
-            *y,
-            rustylife_core::cell::CellState::Alive,
-            1, // Current Mask
-        ));
+        engine.place_cell(*x, *y);
     }
 
     // Step

@@ -55,16 +55,7 @@ fn test_presenter_receives_engine_snapshot() {
 
     engine.add_subscriber(subscriber);
 
-    // Initial state setup
-    {
-        let guard = space.read();
-        space.storage().insert(rustylife_core::cell::Cell::new(
-            0,
-            0,
-            rustylife_core::cell::CellState::Alive,
-            guard.current_state_mask(),
-        ));
-    }
+    engine.place_cell(0, 0);
 
     // Step engine - this should trigger a snapshot and notification
     engine.step();

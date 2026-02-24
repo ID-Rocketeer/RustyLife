@@ -1,4 +1,4 @@
-use rustylife_core::cell::{Cell, CellState};
+use rustylife_core::cell::CellState;
 use rustylife_core::engine::{EngineSubscriber, SimulationEngine};
 use rustylife_core::space::SimulationSpace;
 use std::sync::Arc;
@@ -83,13 +83,7 @@ fn test_isolated_cell_dies() {
     let sync = TestSync::new();
     engine.add_subscriber(sync.clone());
 
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(0, 0, CellState::Alive, mask));
-    }
+    engine.place_cell(0, 0);
 
     // run_engine_in_background(Arc::clone(&engine.engine)); // Removed
 
@@ -114,21 +108,9 @@ fn test_l_shape_consolidates_into_block() {
     let sync = TestSync::new();
     engine.add_subscriber(sync.clone());
 
-    // L-shape (pre-block)
-    // (0,0), (1,0), (0,1)
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(0, 0, CellState::Alive, mask));
-        space
-            .storage()
-            .insert(Cell::new(1, 0, CellState::Alive, mask));
-        space
-            .storage()
-            .insert(Cell::new(0, 1, CellState::Alive, mask));
-    }
+    engine.place_cell(0, 0);
+    engine.place_cell(1, 0);
+    engine.place_cell(0, 1);
 
     // run_engine_in_background(Arc::clone(&engine.engine)); // Removed
 
@@ -187,7 +169,7 @@ fn test_glider_completes_translation_cycle() {
 
     // Glider at (0,0): (1,0), (2,1), (0,2), (1,2), (2,2)
     let initial_pts = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
-    space.seed_glider(0, 0);
+    engine.seed_sync(0, 0, "bob$2bo$3o!".to_string());
 
     let sync = TestSync::new();
     engine.add_subscriber(sync.clone());
@@ -235,13 +217,7 @@ fn test_engine_successfully_completes_single_step_cycle() {
     // run_engine_in_background(Arc::clone(&engine.engine)); // Removed
 
     // 1. Setup initial state: A lonely living cell (should die)
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(0, 0, CellState::Alive, mask));
-    }
+    engine.place_cell(0, 0);
 
     // 2. Run one step
     engine.step();
@@ -266,19 +242,9 @@ fn test_blinker_oscillates_correctly() {
 
     // A block of 3 cells (Blinker part 1)
     // (0,0), (1,0), (2,0) -> Alive
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(0, 0, CellState::Alive, mask));
-        space
-            .storage()
-            .insert(Cell::new(1, 0, CellState::Alive, mask));
-        space
-            .storage()
-            .insert(Cell::new(2, 0, CellState::Alive, mask));
-    }
+    engine.place_cell(0, 0);
+    engine.place_cell(1, 0);
+    engine.place_cell(2, 0);
 
     let sync = TestSync::new();
     engine.add_subscriber(sync.clone());
@@ -327,19 +293,9 @@ fn test_engine_quiesces_consistently_after_autonomous_stop() {
     engine.add_subscriber(sync.clone());
 
     // Blinker vertical
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(1, 0, CellState::Alive, mask));
-        space
-            .storage()
-            .insert(Cell::new(1, 1, CellState::Alive, mask));
-        space
-            .storage()
-            .insert(Cell::new(1, 2, CellState::Alive, mask));
-    }
+    engine.place_cell(1, 0);
+    engine.place_cell(1, 1);
+    engine.place_cell(1, 2);
 
     // run_engine_in_background(Arc::clone(&engine.engine)); // Removed
 
@@ -387,7 +343,7 @@ fn test_four_gliders_stability() {
     // 1. Setup 4 gliders moving away from each other
     let rle = include_str!("../src/patterns/four_gliders.rle");
     // Center the 7x7 pattern at (0,0) by offsetting by (-3, -3)
-    space.seed_from_rle(-3, -3, rle);
+    engine.seed_sync(-3, -3, rle.to_string());
 
     // 2. Setup generation counter subscriber
     // 2. (Removed async counter)
@@ -471,16 +427,9 @@ fn test_engine_remains_stable_under_immediate_stop_stress() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let engine = TestContext::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
 
-    // 1. Add a lot of cells to create load
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        for x in 0..50 {
-            for y in 0..50 {
-                space
-                    .storage()
-                    .insert(Cell::new(x, y, CellState::Alive, mask));
-            }
+    for x in 0..50 {
+        for y in 0..50 {
+            engine.place_cell(x, y);
         }
     }
 
@@ -530,16 +479,9 @@ fn test_engine_remains_stable_under_immediate_stop_stress() {
 #[test]
 fn test_cell_correctly_transitions_through_lifecycle_states() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-    // Initial state: Lonely cell at (0,0)
-    {
-        let guard = space.read();
-        let mask = guard.current_state_mask();
-        space
-            .storage()
-            .insert(Cell::new(0, 0, CellState::Alive, mask));
-    }
-
     let engine = TestContext::new(Arc::clone(&space), rustylife_core::THREAD_POOL_SIZE);
+    // Initial state: Lonely cell at (0,0)
+    engine.place_cell(0, 0);
 
     let sync = TestSync::new();
     engine.add_subscriber(sync.clone());

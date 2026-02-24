@@ -24,7 +24,7 @@ fn test_block_pruning() {
         count
     };
 
-    space.seed_glider(0, 0);
+    engine.seed_sync(0, 0, "bob$2bo$3o!".to_string());
     assert!(count_blocks() > 0, "Should have allocated blocks");
     let initial_count = count_blocks();
     println!("Initial blocks: {}", initial_count);
@@ -77,18 +77,8 @@ fn test_block_pruning() {
     assert_eq!(count_blocks(), 0);
 
     // Seed 2 cells that die immediately (under-population)
-    space.storage().insert(rustylife_core::cell::Cell::new(
-        0,
-        0,
-        rustylife_core::cell::CellState::Alive,
-        1,
-    ));
-    space.storage().insert(rustylife_core::cell::Cell::new(
-        0,
-        1,
-        rustylife_core::cell::CellState::Alive,
-        1,
-    ));
+    engine.place_cell(0, 0);
+    engine.place_cell(0, 1);
 
     assert!(count_blocks() > 0);
 
@@ -121,7 +111,7 @@ fn test_pruning_headroom() {
     let engine = SimulationEngine::new(space.clone(), 1);
 
     // Seed a glider that moves and leaves dead blocks
-    space.seed_glider(0, 0);
+    engine.seed_sync(0, 0, "bob$2bo$3o!".to_string());
 
     let engine_clone = engine.clone();
     std::thread::spawn(move || {

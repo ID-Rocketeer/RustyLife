@@ -50,9 +50,8 @@ fn test_runtime_snapshot_integrity() {
     let space = Arc::new(SimulationSpace::new(256));
     // Use a large pattern to ensure serialization takes non-trivial time, increasing race window.
     let rle = include_str!("../src/patterns/breeder1.rle");
-    space.seed_from_rle(0, 0, rle);
-
     let engine = SimulationEngine::new(space, 4);
+    engine.seed_sync(0, 0, rle.to_string());
     let failure_flag = Arc::new(AtomicBool::new(false));
 
     let subscriber = IntegritySubscriber {

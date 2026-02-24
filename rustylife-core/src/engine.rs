@@ -381,6 +381,38 @@ impl Engine {
     pub fn seed(&self, pattern: String) {
         self.work_queue.enqueue(Tasks::Seed(pattern));
     }
+
+    /// Update the simulation space with a new pattern synchronously.
+    ///
+    /// This is a convenience method for tests to ensure the pattern is
+    /// loaded and `living_count` is updated before proceeding.
+    pub fn seed_sync(&self, x: i128, y: i128, pattern: String) {
+        self.space.clear();
+        self.space.seed_from_rle(x, y, &pattern);
+        let pop = self.space.total_population();
+        self.living_count.store(pop, Ordering::SeqCst);
+    }
+
+    /// Place a single alive cell at `(x, y)` and increment `living_count`.
+    ///
+    /// This is the proper engine-level API for inserting individual cells.
+    /// Unlike calling `storage().insert()` directly, this keeps `living_count`
+    /// in sync so `capture_state` reports accurate population figures.
+    ///
+    /// Must only be called while the engine is stopped.
+    pub fn place_cell(&self, x: i128, y: i128) {
+        let mask = {
+            let guard = self.space.read();
+            guard.current_state_mask()
+        };
+        self.space.storage().insert(crate::cell::Cell::new(
+            x,
+            y,
+            crate::cell::CellState::Alive,
+            mask,
+        ));
+        self.living_count.fetch_add(1, Ordering::SeqCst);
+    }
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
     }
@@ -1005,14 +1037,7 @@ impl Engine {
 
         // Extract cells using Memory Pooling
         let mut vec = engine.io_pool_rx.try_recv().unwrap_or_else(|_| Vec::new());
-        let raw_living_count = engine.living_count.load(Ordering::SeqCst) as usize;
-
-        // Handle tests that bypass `engine.seed()` and let living_count underflow
-        let living_count = if raw_living_count > isize::MAX as usize {
-            0
-        } else {
-            raw_living_count
-        };
+        let living_count = engine.living_count.load(Ordering::SeqCst) as usize;
 
         // Ensure capacity with 25% headroom if reallocation is needed
         if vec.capacity() < living_count {
