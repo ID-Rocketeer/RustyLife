@@ -1,30 +1,30 @@
 import { fmtNum, fmtCoord, formatSI } from './utils.js';
 import { encodeRequest } from './protocol.js';
 
-const countEl = document.getElementById('count');
-const genEl = document.getElementById('generation');
-const playPauseBtn = document.getElementById('play-pause-btn');
-const stepBtn = document.getElementById('step-btn');
-const resetBtn = document.getElementById('reset-btn');
-const originBtn = document.getElementById('origin-btn');
-const quitBtn = document.getElementById('quit-btn');
-const patternSelect = document.getElementById('pattern-select');
-const zoomInBtn = document.getElementById('zoom-in-btn');
-const zoomOutBtn = document.getElementById('zoom-out-btn');
+const countEl = /** @type {HTMLSpanElement} */ (document.getElementById('count'));
+const genEl = /** @type {HTMLSpanElement} */ (document.getElementById('generation'));
+const playPauseBtn = /** @type {HTMLButtonElement} */ (document.getElementById('play-pause-btn'));
+const stepBtn = /** @type {HTMLButtonElement} */ (document.getElementById('step-btn'));
+const resetBtn = /** @type {HTMLButtonElement} */ (document.getElementById('reset-btn'));
+const originBtn = /** @type {HTMLButtonElement} */ (document.getElementById('origin-btn'));
+const quitBtn = /** @type {HTMLButtonElement} */ (document.getElementById('quit-btn'));
+const patternSelect = /** @type {HTMLSelectElement} */ (document.getElementById('pattern-select'));
+const zoomInBtn = /** @type {HTMLButtonElement} */ (document.getElementById('zoom-in-btn'));
+const zoomOutBtn = /** @type {HTMLButtonElement} */ (document.getElementById('zoom-out-btn'));
 
-const extentEl = document.getElementById('extent-display');
-const centerEl = document.getElementById('center-display');
-const boundsEl = document.getElementById('bounds-display');
-const expanseEl = document.getElementById('expanse-display');
-const zoomEl = document.getElementById('zoom-display');
-const workEl = document.getElementById('work-display');
-const netEl = document.getElementById('net-display');
-const gpsEl = document.getElementById('gps-display');
-const coresEl = document.getElementById('cores-display');
+const extentEl = /** @type {HTMLSpanElement} */ (document.getElementById('extent-display'));
+const centerEl = /** @type {HTMLSpanElement} */ (document.getElementById('center-display'));
+const boundsEl = /** @type {HTMLSpanElement} */ (document.getElementById('bounds-display'));
+const expanseEl = /** @type {HTMLSpanElement} */ (document.getElementById('expanse-display'));
+const zoomEl = /** @type {HTMLSpanElement} */ (document.getElementById('zoom-display'));
+const workEl = /** @type {HTMLSpanElement} */ (document.getElementById('work-display'));
+const netEl = /** @type {HTMLSpanElement} */ (document.getElementById('net-display'));
+const gpsEl = /** @type {HTMLSpanElement} */ (document.getElementById('gps-display'));
+const coresEl = /** @type {HTMLSpanElement} */ (document.getElementById('cores-display'));
 
-const statusDot = document.getElementById('status-dot');
-const statusText = document.getElementById('status-text');
-const canvas = document.getElementById('sim-canvas');
+const statusDot = /** @type {HTMLDivElement} */ (document.getElementById('status-dot'));
+const statusText = /** @type {HTMLSpanElement} */ (document.getElementById('status-text'));
+const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('sim-canvas'));
 const ctx = canvas.getContext('2d');
 
 let socket;
@@ -426,10 +426,11 @@ quitBtn.onclick = () => {
 };
 
 patternSelect.onchange = (e) => {
-    const pattern = e.target.value;
+    const target = /** @type {HTMLSelectElement} */ (e.target);
+    const pattern = target.value;
     if (pattern) {
         sendRequest("Seed", pattern);
-        e.target.value = "";
+        target.value = "";
     }
 };
 
