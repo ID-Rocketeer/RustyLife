@@ -69,13 +69,22 @@ impl Scratchpad {
         }
     }
 
-    /// Clears all buffers without deallocating.
+    /// Clears all buffers without deallocating wholesale, but applying staggered
+    /// capacity shrinking to prevent memory hoarding on high thread counts.
     /// SAFETY: Must be called when no other threads are accessing the scratchpad.
-    pub fn clear(&self) {
-        for row in &self.rows {
+    pub fn clear(&self, generation: u64) {
+        for (thread_idx, row) in self.rows.iter().enumerate() {
+            // Stagger the shrinking: only one thread checks its buckets per generation.
+            // This prevents a massive latency spike from all threads reallocating at once.
+            let should_shrink = (generation as usize % self.thread_count) == thread_idx;
+
             for bucket_cell in row {
                 unsafe {
-                    (*bucket_cell.value.get()).clear();
+                    let vec = &mut *bucket_cell.value.get();
+                    if should_shrink && vec.capacity() > 16384 && vec.len() < 4096 {
+                        vec.shrink_to_fit();
+                    }
+                    vec.clear();
                 }
             }
         }
@@ -110,3 +119,113 @@ impl Scratchpad {
 // via the engine's phase barriers and unique thread indexing.
 unsafe impl Send for Scratchpad {}
 unsafe impl Sync for Scratchpad {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_staggered_capacity_shrink() {
+        let thread_count = 4;
+        let bucket_count = 2;
+        let scratchpad = Scratchpad::new(thread_count, bucket_count);
+
+        // Populate to exceed shrink threshold (16384 capacity, <4096 len at clear time)
+        for t in 0..thread_count {
+            for b in 0..bucket_count {
+                unsafe {
+                    let vec_ptr = scratchpad.rows[t][b].value.get();
+                    (*vec_ptr).reserve_exact(20000);
+                    (*vec_ptr).push(Candidate {
+                        hash_idx: b,
+                        x: 0,
+                        y: 0,
+                        payload: 0,
+                        mask: 0,
+                    });
+                }
+            }
+        }
+
+        // Verify initial capacity
+        for t in 0..thread_count {
+            for b in 0..bucket_count {
+                unsafe {
+                    let vec_ptr = scratchpad.rows[t][b].value.get();
+                    assert!((*vec_ptr).capacity() >= 20000);
+                    assert_eq!((*vec_ptr).len(), 1);
+                }
+            }
+        }
+
+        // Gen 0 shrinks thread 0
+        scratchpad.clear(0);
+        for t in 0..thread_count {
+            for b in 0..bucket_count {
+                unsafe {
+                    let vec_ptr = scratchpad.rows[t][b].value.get();
+                    assert_eq!((*vec_ptr).len(), 0);
+                    if t == 0 {
+                        assert!((*vec_ptr).capacity() < 20000, "Thread 0 should have shrunk");
+                        // shrink_to_fit on a len=1 vector shrinks it to capacity >= 1.
+                        assert!(
+                            (*vec_ptr).capacity() <= 4,
+                            "Vector should be shrunk to fit its 1 element"
+                        );
+                    } else {
+                        assert!(
+                            (*vec_ptr).capacity() >= 20000,
+                            "Thread {} should NOT have shrunk yet",
+                            t
+                        );
+                    }
+                }
+            }
+        }
+
+        // Gen 1 shrinks thread 1
+        scratchpad.clear(1);
+        for t in 0..thread_count {
+            for b in 0..bucket_count {
+                unsafe {
+                    let vec_ptr = scratchpad.rows[t][b].value.get();
+                    assert_eq!((*vec_ptr).len(), 0);
+                    if t == 0 || t == 1 {
+                        assert!(
+                            (*vec_ptr).capacity() < 20000,
+                            "Thread {} should have shrunk",
+                            t
+                        );
+                    } else {
+                        assert!(
+                            (*vec_ptr).capacity() >= 20000,
+                            "Thread {} should NOT have shrunk yet",
+                            t
+                        );
+                    }
+                }
+            }
+        }
+
+        // Gen 4 shrinks thread 0 again (modulo wrap around)
+        // Let's reserve thread 0 again and verify Gen 4 shrinks it
+        for b in 0..bucket_count {
+            unsafe {
+                let vec_ptr = scratchpad.rows[0][b].value.get();
+                (*vec_ptr).reserve_exact(20000);
+                assert!((*vec_ptr).capacity() >= 20000);
+            }
+        }
+
+        scratchpad.clear(4);
+        for b in 0..bucket_count {
+            unsafe {
+                let vec_ptr = scratchpad.rows[0][b].value.get();
+                assert!(
+                    (*vec_ptr).capacity() < 20000,
+                    "Thread 0 should have shrunk again on gen 4"
+                );
+            }
+        }
+    }
+}

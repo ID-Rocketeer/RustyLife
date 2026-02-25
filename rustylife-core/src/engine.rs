@@ -669,7 +669,7 @@ impl Engine {
         }
 
         // Initialize phase counter before enqueuing
-        engine.scratchpad.clear();
+        engine.scratchpad.clear(engine.generation());
         // Reset per-step metrics
         engine.work.store(0, Ordering::SeqCst); // Work is also per-step for telemetry?
         // dead_block_count is cumulative for pruning, don't reset.
@@ -866,11 +866,17 @@ impl Engine {
         let mut total_born = 0;
         let mut total_died = 0;
 
+        let generation = engine.generation();
+        let should_shrink = (generation as usize % engine.pool_size) == thread_idx;
+
         for bucket_idx in bucket_start..bucket_end {
             if bucket_idx >= storage.buckets.len() {
                 break;
             }
 
+            if should_shrink && buffer.incoming.capacity() > 16384 && buffer.incoming.len() < 4096 {
+                buffer.incoming.shrink_to_fit();
+            }
             buffer.incoming.clear();
             engine
                 .scratchpad
