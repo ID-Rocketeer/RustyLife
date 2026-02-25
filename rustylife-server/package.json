@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "tsc --noEmit && vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "jsdom": "^28.1.0",

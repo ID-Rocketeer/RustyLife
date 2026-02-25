@@ -1,0 +1,2 @@
+# Enforce LF line endings for auto-generated TypeScript files from Rust ts-rs
+*.ts text eol=lf

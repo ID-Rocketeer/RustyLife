@@ -25,7 +25,7 @@ You need **Rust** installed on your machine.
     - Download the "Visual Studio Build Tools" installer from Microsoft.
     - Select the **"Desktop development with C++"** workload.
     - This is required for the MSVC linker used by Rust on Windows.
-2.  **Install Node.js (for Web GUI testing)**:
+2.  **Install Node.js (for automated Protocol Validation and Web GUI testing)**:
     - Open an Administrator PowerShell and run:
       ```powershell
       winget install OpenJS.NodeJS
@@ -43,7 +43,7 @@ You need **Rust** installed on your machine.
     sudo apt-get update
     sudo apt-get install build-essential pkg-config libssl-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libgtk-3-dev
     ```
-2.  **Install Node.js (for Web GUI testing)**:
+2.  **Install Node.js (for automated Protocol Validation and Web GUI testing)**:
     - The easiest way is via NVM (Node Version Manager) or the Nodesource packages:
       ```bash
       curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
@@ -78,9 +78,12 @@ You need **Rust** installed on your machine.
     ```
 
 ## Development
-- **Run Tests**: `cargo test`
-- **Check Lints**: `cargo check`
-- **Format Code**: `cargo fmt`
+- **Run Rust Tests**: `cargo test`
+- **Check Rust Lints**: `cargo check`
+- **Format Rust Code**: `cargo fmt`
+- **Validate Web Protocol**:
+  - First, `cd rustylife-server && npm install`
+  - Then run `npm run typecheck` (for TS validations) and `npm run test` (for Web GUI tests)
 
 ### Git Hooks (Optional but Recommended)
 To prevent accidentally committing failing code, this repository includes a pre-commit hook that runs the Rust and Node.js test suites.
