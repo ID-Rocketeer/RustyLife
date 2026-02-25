@@ -74,7 +74,6 @@ pub enum Response {
     Ok,
     /// Notification that a new snapshot is available with full telemetry.
     SnapshotAvailable {
-        // generation: u64, // TODO: Remove since it's in telemetry
         telemetry: Telemetry,
     },
     /// A generic error message.

@@ -77,4 +77,46 @@ describe('Dashboard Panning & Zooming', () => {
         // Due to the bug, it aborts immediately and never repaints!
         expect(mockCtx.fillRect.mock.calls.length).toBeGreaterThan(initialDrawCount);
     });
+
+    it('should NOT reset viewport center when generation resets to 0', async () => {
+        await import('../static/dashboard.js');
+        await new Promise(r => setTimeout(r, 10));
+
+        // 1. Simulate panning both X and Y
+        const canvas = document.getElementById('sim-canvas');
+        canvas.dispatchEvent(new MouseEvent('mousedown', { clientX: 0, clientY: 0 }));
+        window.dispatchEvent(new MouseEvent('mousemove', { clientX: 100, clientY: 100 }));
+        window.dispatchEvent(new MouseEvent('mouseup'));
+
+        const centerEl = document.getElementById('center-display');
+        const pannedCenter = centerEl.innerHTML;
+        // The default is [ +000000000 , +000000000 ]. 
+        // Panning by 100,100 with scale 4 should result in cx=-25, cy=25
+        expect(pannedCenter).not.toContain('+000000000'); // Now it should fail to contain it in both parts
+
+        // 2. Setup currentGen > 0
+        const msg1 = JSON.stringify({
+            type: "SnapshotAvailable",
+            payload: { telemetry: { generation: 1 } }
+        });
+        const bytes1 = new TextEncoder().encode(msg1);
+        const buf1 = new ArrayBuffer(4 + bytes1.length);
+        new DataView(buf1).setUint32(0, bytes1.length, true);
+        new Uint8Array(buf1).set(bytes1, 4);
+        wsInstance.onmessage({ data: buf1 });
+
+        // 3. Simulate "Reset" (SnapshotAvailable with gen 0)
+        const msg0 = JSON.stringify({
+            type: "SnapshotAvailable",
+            payload: { telemetry: { generation: 0 } }
+        });
+        const bytes0 = new TextEncoder().encode(msg0);
+        const buf0 = new ArrayBuffer(4 + bytes0.length);
+        new DataView(buf0).setUint32(0, bytes0.length, true);
+        new Uint8Array(buf0).set(bytes0, 4);
+        wsInstance.onmessage({ data: buf0 });
+
+        // 4. Verify center is preserved (THIS SHOULD FAIL)
+        expect(centerEl.innerHTML).toBe(pannedCenter);
+    });
 });

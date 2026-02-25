@@ -9,9 +9,8 @@ use tokio::sync::broadcast;
 pub struct RustyLifeApp {
     state: Arc<Mutex<AppState>>,
     handler: Box<dyn UserActionHandler>,
-    cell_size: f32,
-    view_offset: egui::Vec2,
-    last_generation: u64,
+    pub(crate) projection: crate::projection::ViewProjection,
+    pub(crate) last_generation: u64,
 
     // Viewport Sync
     last_requested_viewport: Option<((i128, i128), (i128, i128))>,
@@ -34,8 +33,7 @@ impl RustyLifeApp {
         Self {
             state,
             handler,
-            cell_size: 4.0,
-            view_offset: egui::Vec2::ZERO,
+            projection: crate::projection::ViewProjection::new(4.0),
             last_generation: u64::MAX,
             last_requested_viewport: None,
             last_request_time: Instant::now(),
@@ -43,6 +41,12 @@ impl RustyLifeApp {
             shutdown_rx,
             first_frame: true,
         }
+    }
+}
+
+impl RustyLifeApp {
+    pub(crate) fn sync_generation(&mut self, generation: u64) {
+        self.last_generation = generation;
     }
 }
 
@@ -122,11 +126,7 @@ impl eframe::App for RustyLifeApp {
             )
         };
 
-        if generation == 0 && self.last_generation != 0 && self.view_offset != egui::Vec2::ZERO {
-            self.view_offset = egui::Vec2::ZERO;
-            self.last_update_time = None;
-        }
-        self.last_generation = generation;
+        self.sync_generation(generation);
         self.last_update_time = Some(Instant::now());
 
         // --- Header ---
@@ -231,7 +231,7 @@ impl eframe::App for RustyLifeApp {
                             };
 
                             if ui.add_sized([54.0, btn_h], nav_style("Origin")).clicked() {
-                                self.view_offset = Vec2::ZERO;
+                                self.projection.offset = Vec2::ZERO;
                             }
 
                             ui.menu_button(
@@ -255,14 +255,10 @@ impl eframe::App for RustyLifeApp {
                             .on_hover_text("Load a pattern");
 
                             if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
-                                let old = self.cell_size;
-                                self.cell_size = (self.cell_size + 1.0).min(32.0);
-                                self.view_offset *= self.cell_size / old;
+                                self.projection.zoom_at_center(1.0);
                             }
                             if ui.add_sized([40.0, btn_h], nav_style("-")).clicked() {
-                                let old = self.cell_size;
-                                self.cell_size = (self.cell_size - 1.0).max(1.0);
-                                self.view_offset *= self.cell_size / old;
+                                self.projection.zoom_at_center(-1.0);
                             }
                         });
                     });
@@ -377,7 +373,7 @@ impl eframe::App for RustyLifeApp {
                                     ui.monospace(
                                         egui::RichText::new(format!(
                                             "[ {:0>5.2}X ]",
-                                            self.cell_size
+                                            self.projection.cell_size
                                         ))
                                         .color(crate::style::COLOR_DATA),
                                     );
@@ -386,9 +382,9 @@ impl eframe::App for RustyLifeApp {
                                     // Extent
                                     let viewport_rect = ctx.input(|i| i.screen_rect);
                                     let width_cells =
-                                        (viewport_rect.width() / self.cell_size) as i64;
+                                        (viewport_rect.width() / self.projection.cell_size) as i64;
                                     let height_cells =
-                                        (viewport_rect.height() / self.cell_size) as i64;
+                                        (viewport_rect.height() / self.projection.cell_size) as i64;
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new("EXTENT:")
@@ -410,11 +406,13 @@ impl eframe::App for RustyLifeApp {
                                     );
                                     ui.add_space(20.0);
 
-                                    // Center
-                                    // Use last_offset to update Center with actual view?
-                                    // Center is defined as view_offset relative to (0,0)?
-                                    let center_x = (-self.view_offset.x / self.cell_size) as i64;
-                                    let center_y = (self.view_offset.y / self.cell_size) as i64;
+                                    // Center (Original coordinate display logic)
+                                    let center_x = (-self.projection.offset.x
+                                        / self.projection.cell_size)
+                                        as i64;
+                                    let center_y = (self.projection.offset.y
+                                        / self.projection.cell_size)
+                                        as i64;
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new("CENTER:")
@@ -595,7 +593,7 @@ impl eframe::App for RustyLifeApp {
                     let rect = response.rect;
 
                     if response.dragged() {
-                        self.view_offset += response.drag_delta();
+                        self.projection.offset += response.drag_delta();
                     }
 
                     // Handle Zooming (Mouse Wheel)
@@ -604,32 +602,13 @@ impl eframe::App for RustyLifeApp {
                         if zoom_delta != 0.0 {
                             let pointer_pos =
                                 ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
-                            let current_center = rect.center() + self.view_offset;
-
-                            // Calculate world coordinate under local pointer
-                            let offset_from_center = pointer_pos - current_center;
-                            let world_x = offset_from_center.x / self.cell_size;
-                            let world_y = offset_from_center.y / self.cell_size;
-
                             let delta = if zoom_delta > 0.0 { 1.0 } else { -1.0 };
-                            let new_cell_size = (self.cell_size + delta).clamp(1.0, 32.0);
-
-                            if new_cell_size != self.cell_size {
-                                self.view_offset = pointer_pos
-                                    - rect.center()
-                                    - egui::vec2(world_x * new_cell_size, world_y * new_cell_size);
-                                self.cell_size = new_cell_size;
-                            }
+                            self.projection.zoom_at_pointer(pointer_pos, rect, delta);
                         }
                     }
 
-                    let center = rect.center() + self.view_offset;
-
                     // Calculate visible bounds
-                    let min_x = ((rect.min.x - center.x) / self.cell_size).floor() as i128;
-                    let max_x = ((rect.max.x - center.x) / self.cell_size).ceil() as i128;
-                    let min_y = ((rect.min.y - center.y) / self.cell_size).floor() as i128;
-                    let max_y = ((rect.max.y - center.y) / self.cell_size).ceil() as i128;
+                    let ((min_x, min_y), (max_x, max_y)) = self.projection.visible_bounds(rect);
 
                     // Update Viewport Target in State (Optimistic)
                     {
@@ -645,22 +624,20 @@ impl eframe::App for RustyLifeApp {
                             _ => continue,
                         };
 
+                        let screen_pos = self.projection.world_to_screen(x, y, rect);
                         painter.rect_filled(
                             egui::Rect::from_min_size(
-                                egui::pos2(
-                                    center.x + (x as f32 * self.cell_size),
-                                    center.y + (y as f32 * self.cell_size),
-                                ),
+                                screen_pos,
                                 egui::vec2(
-                                    if self.cell_size <= 1.0 {
-                                        self.cell_size
+                                    if self.projection.cell_size <= 1.0 {
+                                        self.projection.cell_size
                                     } else {
-                                        self.cell_size - 1.0
+                                        self.projection.cell_size - 1.0
                                     },
-                                    if self.cell_size <= 1.0 {
-                                        self.cell_size
+                                    if self.projection.cell_size <= 1.0 {
+                                        self.projection.cell_size
                                     } else {
-                                        self.cell_size - 1.0
+                                        self.projection.cell_size - 1.0
                                     },
                                 ),
                             ),
@@ -845,5 +822,40 @@ impl egui::Widget for MediaButton {
             }
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockHandler;
+    impl crate::UserActionHandler for MockHandler {
+        fn start(&mut self) {}
+        fn stop(&mut self) {}
+        fn step(&mut self) {}
+        fn reset(&mut self) {}
+        fn seed(&mut self, _: String) {}
+        fn request_state(&mut self, _: u64, _: Option<((i128, i128), (i128, i128))>) {}
+        fn shutdown(&mut self) {}
+    }
+
+    #[test]
+    fn test_viewport_persistence_bug() {
+        let state = Arc::new(Mutex::new(AppState::default()));
+        let mut app = RustyLifeApp::new(state.clone(), Box::new(MockHandler), None);
+
+        let initial_offset = egui::Vec2::new(123.0, 456.0);
+        app.projection.offset = initial_offset;
+        app.last_generation = 10;
+
+        // Simulate a reset to generation 0
+        app.sync_generation(0);
+
+        // EXPECTATION: Viewport should be persistent (NOT reset to ZERO)
+        assert_eq!(
+            app.projection.offset, initial_offset,
+            "Viewport offset should persist across simulation reset"
+        );
     }
 }

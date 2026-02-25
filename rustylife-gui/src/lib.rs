@@ -1,5 +1,6 @@
 // Force rebuild
 pub mod app;
+pub mod projection;
 pub mod state;
 pub mod style;
 pub mod text;

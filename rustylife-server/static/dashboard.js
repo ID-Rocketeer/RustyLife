@@ -338,11 +338,10 @@ function connect() {
         // So `header.type` === "BinaryStateHeader", and `header.payload` is the object with fields.
 
         if (header.type === "SnapshotAvailable") {
-            const { generation, telemetry } = header.payload;
+            const { telemetry } = header.payload;
+            const generation = telemetry.generation;
             const gen = BigInt(generation);
             if (gen === 0n && currentGen !== 0n) {
-                offsetX = 0;
-                offsetY = 0;
                 lastRenderedGen = -1n;
                 updateInstrumentation();
             }
