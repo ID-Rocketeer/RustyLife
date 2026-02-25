@@ -308,6 +308,7 @@ function connect() {
         const jsonBytes = new Uint8Array(rawData, 4, jsonLen);
         const jsonStr = new TextDecoder().decode(jsonBytes);
 
+        /** @type {import('./types/Response').Response} */
         let header;
         try {
             header = JSON.parse(jsonStr);

@@ -19,9 +19,11 @@ pub const THREAD_POOL_SIZE: usize = 16;
 pub const BUCKET_COUNT: usize = 185;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Represents a request from the client.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../rustylife-server/static/types/")]
 pub struct PatternInfo {
     pub name: String,
     pub description: String,
@@ -29,7 +31,8 @@ pub struct PatternInfo {
 }
 
 /// Represents a request from a client to the simulation server.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../rustylife-server/static/types/")]
 #[serde(tag = "type", content = "payload")]
 pub enum Request {
     NextStep,
@@ -45,7 +48,8 @@ pub enum Request {
 }
 
 /// Shared telemetry metrics for all interfaces.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../rustylife-server/static/types/")]
 pub struct Telemetry {
     pub generation: u64,
     pub population: u64,
@@ -68,7 +72,8 @@ impl Telemetry {
 }
 
 /// Represents a response from the simulation server to a client.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../rustylife-server/static/types/")]
 #[serde(tag = "type", content = "payload")]
 pub enum Response {
     Ok,
@@ -330,5 +335,15 @@ mod tests {
         let result = decode_binary_packet(&corrupted_buf);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Checksum mismatch");
+    }
+
+    #[test]
+    fn export_ts_bindings() {
+        use ts_rs::TS;
+        let config = ts_rs::Config::default();
+        Request::export(&config).expect("Failed to export Request type");
+        Response::export(&config).expect("Failed to export Response");
+        Telemetry::export(&config).expect("Failed to export Telemetry");
+        PatternInfo::export(&config).expect("Failed to export PatternInfo");
     }
 }
