@@ -1,6 +1,48 @@
-use rustylife_core::engine::SimulationEngine;
+use rustylife_core::engine::{EngineSubscriber, SimulationEngine};
 use rustylife_core::space::SimulationSpace;
 use std::sync::Arc;
+use std::sync::{Condvar, Mutex};
+
+struct TestSync {
+    state: Mutex<u64>,
+    cond: Condvar,
+}
+
+impl TestSync {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(0),
+            cond: Condvar::new(),
+        })
+    }
+
+    fn wait_for_generation(&self, target: u64) {
+        let mut guard = self.state.lock().unwrap();
+        while *guard < target {
+            let result = self
+                .cond
+                .wait_timeout(guard, std::time::Duration::from_secs(5))
+                .unwrap();
+            guard = result.0;
+            if result.1.timed_out() {
+                panic!("Timed out waiting for generation {}", target);
+            }
+        }
+    }
+}
+
+impl EngineSubscriber for TestSync {
+    fn on_snapshot_available(
+        &self,
+        _data: Arc<Vec<u8>>,
+        telemetry: rustylife_core::Telemetry,
+    ) -> bool {
+        let mut guard = self.state.lock().unwrap();
+        *guard = telemetry.generation;
+        self.cond.notify_all();
+        true
+    }
+}
 
 #[test]
 fn test_cross_boundary_block() {
@@ -31,29 +73,15 @@ fn test_cross_boundary_block() {
         engine.place_cell(*x, *y);
     }
 
+    let sync = TestSync::new();
+    engine.add_subscriber(sync.clone());
+
     // Step
     engine.step();
 
-    // Wait slightly (though step puts task in queue, we need to wait for worker)
-    // Actually engine.step() just enqueues. We need to run the engine or manually process?
-    // In unit tests, we usually run the worker manually or use a helper.
-    // `engine.run_worker` blocks.
-    // Let's use `process_task` logic or a short sleep if we spawn a thread.
-    // Better: Spawn a thread for the engine worker.
-
-    let engine_clone = engine.clone();
-    std::thread::spawn(move || {
-        SimulationEngine::run_worker(engine_clone, 0);
-    });
-
-    // Wait for generation to advance
-    let start = std::time::Instant::now();
-    while engine.generation() < 1 {
-        if start.elapsed().as_secs() > 1 {
-            panic!("Timeout waiting for step");
-        }
-        std::thread::yield_now();
-    }
+    // The workers are already running (SimulationEngine::new spawns threads)
+    // Wait for the snapshot (which happens AFTER the generation is complete)
+    sync.wait_for_generation(1);
 
     // Check results
     // All should survive.

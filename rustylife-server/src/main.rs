@@ -32,7 +32,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "RustyLife Server - High-performance Game of Life engine", long_about = None)]
 pub struct Args {
     /// Enable the integrated native GUI
     #[arg(short, long)]
@@ -57,6 +57,14 @@ pub struct Args {
     /// Automatically start the simulation after seeding
     #[arg(long)]
     pub autostart: bool,
+
+    /// Prevent Windows from suspending the process when locked
+    #[arg(long)]
+    pub stay_awake: bool,
+
+    /// Enable periodic status logging to the console (every 20 minutes)
+    #[arg(short, long)]
+    pub log: bool,
 }
 
 fn to_cartesian_bounds(
@@ -123,6 +131,58 @@ impl EngineSubscriber for PresenterSubscriber {
         if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
             let mut presenter = self.presenter.lock().unwrap();
             presenter.update_state(packet, telemetry);
+        }
+        true
+    }
+}
+
+/// A subscriber that logs status updates to the console periodically.
+pub struct LoggingSubscriber {
+    last_log: Mutex<Option<std::time::Instant>>,
+}
+
+impl LoggingSubscriber {
+    pub fn new() -> Self {
+        Self {
+            last_log: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for LoggingSubscriber {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EngineSubscriber for LoggingSubscriber {
+    fn on_snapshot_available(
+        &self,
+        _data: Arc<Vec<u8>>,
+        telemetry: rustylife_core::Telemetry,
+    ) -> bool {
+        let mut last_log = self.last_log.lock().unwrap();
+        let now = std::time::Instant::now();
+
+        // Log if it's the first snapshot (Generation 0 benchmark) or every 20 minutes
+        let should_log = match *last_log {
+            None => true,
+            Some(last) => now.duration_since(last) >= std::time::Duration::from_secs(20 * 60),
+        };
+
+        if should_log {
+            let timestamp = chrono::Utc::now().format("%H:%M:%S UTC");
+            let bounds_str = if let Some(((min_x, min_y), (max_x, max_y))) = telemetry.bounds {
+                format!("({}, {}) to ({}, {})", min_x, min_y, max_x, max_y)
+            } else {
+                "None".to_string()
+            };
+
+            println!(
+                "[{}] Gen: {}, Pop: {}, GPS: {:.2}, Bounds: {}",
+                timestamp, telemetry.generation, telemetry.population, telemetry.gps, bounds_str
+            );
+            *last_log = Some(now);
         }
         true
     }
@@ -282,6 +342,34 @@ pub fn write_crash_telemetry(
     Ok(())
 }
 
+/// Prevents the system from entering sleep mode while the simulation is running.
+/// Only effective on Windows.
+#[cfg(windows)]
+fn prevent_sleep(enable: bool) {
+    if !enable {
+        return;
+    }
+
+    // Windows API Constants
+    const ES_CONTINUOUS: u32 = 0x80000000;
+    const ES_SYSTEM_REQUIRED: u32 = 0x00000001;
+
+    unsafe extern "system" {
+        fn SetThreadExecutionState(esFlags: u32) -> u32;
+    }
+
+    unsafe {
+        // Set the state to continuous + system required
+        // This tells Windows "don't sleep the CPU, but you can turn off the monitor".
+        let res = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        if res == 0 {
+            eprintln!("Warning: Failed to set thread execution state (Windows sleep prevention).");
+        } else {
+            println!("Windows sleep prevention enabled.");
+        }
+    }
+}
+
 fn setup_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -295,7 +383,7 @@ fn setup_panic_hook() {
 }
 
 fn main() {
-    let args = Args::parse();
+    let args = rustylife_core::cli::init_cli::<Args>();
 
     // We must run the GUI on the main thread for Windows/Cross-platform compatibility.
     // So we'll run use a manual Tokio runtime on a background thread.
@@ -318,6 +406,10 @@ fn main() {
     let _ = ENGINE_REF.set(Arc::downgrade(&engine));
     setup_panic_hook();
 
+    // Windows sleep prevention
+    #[cfg(windows)]
+    prevent_sleep(args.stay_awake);
+
     // Load dynamic patterns from "patterns/" directory
     println!("Loading patterns from ./patterns directory...");
     load_dynamic_patterns(&engine);
@@ -330,6 +422,10 @@ fn main() {
         tx: tx.clone(),
     });
     engine.add_subscriber(subscriber);
+
+    if args.log {
+        engine.add_subscriber(Arc::new(LoggingSubscriber::new()));
+    }
 
     let gui_state = if args.gui {
         let state = rustylife_gui::AppState {

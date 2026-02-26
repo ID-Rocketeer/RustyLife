@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "RustyLife Client - Remote simulation monitor", long_about = None)]
 struct ClientArgs {
     /// Server IP address to connect to
     #[arg(long, default_value = "127.0.0.1")]
@@ -61,7 +61,7 @@ impl UserActionHandler for ClientActionHandler {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = ClientArgs::parse();
+    let args = rustylife_core::cli::init_cli::<ClientArgs>();
     let client_state = Arc::new(Mutex::new(AppState::default()));
 
     // Ctrl-C Handler for clean shutdown

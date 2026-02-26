@@ -7,6 +7,7 @@
 
 pub mod block_tree;
 pub mod cell;
+pub mod cli;
 pub mod engine;
 pub mod hash;
 pub mod patterns;

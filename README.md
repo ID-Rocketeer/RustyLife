@@ -67,15 +67,25 @@ You need **Rust** installed on your machine.
     ```bash
     cargo run --release --bin rustylife-server -- --gui
     ```
-    *Flags:*
-    - `--gui`: Launches the integrated graphical window.
-    - `--port <N>`: Sets the web dashboard port (default 8080).
+
+    ### Server Switches
+    - `-p`, `--port <PORT>`: HTTP port for the dashboard (default: 8080)
+    - `-i`, `--ipc-port <PORT>`: TCP port for IPC simulation control (default: 9001)
+    - `--stay-awake`: Prevent Windows from suspending the system when locked (Windows only)
+    - `-l`, `--log`: Enable periodic status logging (Console output every 20 minutes)
+    - `-g`, `--generations <N>`: Run for exactly N generations then exit (Profiling)
+    - `--help`: Display available commands and exit
 
 3.  **Run the Client (Optional)**:
     Open a new terminal window to control the server via CLI.
     ```bash
     cargo run --release --bin rustylife-client -- --help
     ```
+
+    ### Client Switches
+    - `-s`, `--server <ADDR>`: IP address of the server (e.g., 192.168.1.5)
+    - `-i`, `--ipc-port <PORT>`: Target IPC port (default: 9001)
+    - `--help`: Display available commands and exit
 
 ## Development
 - **Run Rust Tests**: `cargo test`
