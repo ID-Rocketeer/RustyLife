@@ -6,7 +6,7 @@ This document tracks future features, investigations, and known issues that have
 - [x] **Web GUI Idle Viewport Updates:** When panning or zooming the viewport while the simulation engine is paused/idle, the Web GUI does not update the display. This makes it very difficult to see changes to the view position.
 
 ## Licensing & Release
-- [ ] **GPL-3.0 Licensing:** Implement the GNU General Public License v3.0 text in the repository and add copyright headers (`Copyright (C) 2026 Steven P. Collins. All rights reserved.`) to all source files. Add a rule to rules.md to ensure this is maintained.
+- [x] **GPL-3.0 Licensing:** Implement the GNU General Public License v3.0 text in the repository and add copyright headers (`Copyright (C) 2026 Steven P. Collins. All rights reserved.`) to all source files. Add a rule to rules.md to ensure this is maintained.
 
 ## Performance & Telemetry
 - [ ] **Fix GPS "Double-Count" Bug:** The current GPS calculation in `engine.rs` reports values nearly 2.0x higher than wall-clock progress.
