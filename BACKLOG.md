@@ -12,7 +12,7 @@ This document tracks future features, investigations, and known issues that have
 - [x] **Fix GPS "Double-Count" Bug:** The current GPS calculation in `engine.rs` reports values nearly 2.0x higher than wall-clock progress.
     - *Fix: Refactored `Telemetry` to use a `reset()` method on cycle start, removed redundant updates, and treated Generation 0 as a reset event to ensure accurate initial GPS.*
 - [ ] **Automated Performance Baselines:** Implement automated tracking of performance metrics over long-duration runs. This includes tracking the **minimum and maximum inter-generation intervals** in the logger to detect performance "slips" or environmental hitches.
-- [ ] **Timestamp in Crash Report:** Ensure all crash reports (Panic and OOM) include the system wall-clock time. This is critical for identifying exactly when a failure occurred during unattended long-duration runs.
+- [x] **Timestamp in Crash Report:** Ensure all crash reports (Panic and OOM) include the system wall-clock time. This is critical for identifying exactly when a failure occurred during unattended long-duration runs.
 
 ## Engine & Testing Hardening
 - [x] **"Corner Case" Verification Tests:** Implement a battery of tests that specifically verify engine stability for patterns spanning multiple block boundaries (e.g., the 4-corners configuration).

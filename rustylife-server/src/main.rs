@@ -186,7 +186,7 @@ impl EngineSubscriber for LoggingSubscriber {
         };
 
         if should_log {
-            let timestamp = chrono::Utc::now().format("%H:%M:%S UTC");
+            let timestamp = chrono::Utc::now().format("[%H:%M:%S UTC]");
             let bounds_str = if let Some(((min_x, min_y), (max_x, max_y))) = telemetry.bounds {
                 format!("({}, {}) to ({}, {})", min_x, min_y, max_x, max_y)
             } else {
@@ -194,8 +194,13 @@ impl EngineSubscriber for LoggingSubscriber {
             };
 
             println!(
-                "[{}] Gen: {}, Pop: {}, GPS: {:.2}, Bounds: {}",
-                timestamp, telemetry.generation, telemetry.population, telemetry.gps, bounds_str
+                "{} Gen: {}, Pop: {}, GPS: {}, Work Rate: {}, Bounds: {}",
+                timestamp,
+                format_with_commas(telemetry.generation),
+                format_with_commas(telemetry.population),
+                format_si_rate(telemetry.gps),
+                format_si_rate(telemetry.work_rate),
+                bounds_str
             );
             *last_log = Some(now);
         }
@@ -260,6 +265,34 @@ impl UserActionHandler for ServerActionHandler {
 
 static ENGINE_REF: OnceLock<Weak<SimulationEngine>> = OnceLock::new();
 
+fn format_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    let chars: Vec<char> = s.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0 && (chars.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
+}
+
+fn format_si_rate(val: f64) -> String {
+    let units = ["", "K", "M", "G", "T"];
+    let mut v = val.abs();
+    let mut u = 0;
+    while v >= 999.995 && u < units.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    if units[u].is_empty() {
+        format!("{:.2} /s", v)
+    } else {
+        format!("{:.2} {}/s", v, units[u])
+    }
+}
+
 struct OomTelemetryAllocator;
 
 unsafe impl GlobalAlloc for OomTelemetryAllocator {
@@ -323,14 +356,20 @@ pub fn write_crash_telemetry(
     writeln!(out, "\n==================================================")?;
     writeln!(out, "              RUSTYLIFE CRASH REPORT              ")?;
     writeln!(out, "==================================================")?;
+    writeln!(out, "{}", chrono::Utc::now().format("[%H:%M:%S UTC]"))?;
+    writeln!(out)?;
 
     if let Some(engine) = engine {
         writeln!(out, "Simulation State at Crash:")?;
-        writeln!(out, "  Generation: {}", engine.generation())?;
+        writeln!(
+            out,
+            "  Generation: {}",
+            format_with_commas(engine.generation())
+        )?;
         writeln!(
             out,
             "  Population: {}",
-            engine.living_count.load(Ordering::Relaxed)
+            format_with_commas(engine.living_count.load(Ordering::Relaxed))
         )?;
 
         write!(out, "  Bounds:     ")?;
@@ -345,9 +384,9 @@ pub fn write_crash_telemetry(
         }
 
         if let Ok(tel) = engine.telemetry.try_lock() {
-            writeln!(out, "  GPS:        {:.2} / s", tel.gps)?;
-            writeln!(out, "  Work Rate:  {:.2} / s", tel.work_rate_ema)?;
-            writeln!(out, "  Net Rate:   {:.2} / s", tel.net_rate_ema)?;
+            writeln!(out, "  GPS:        {}", format_si_rate(tel.gps))?;
+            writeln!(out, "  Work Rate:  {}", format_si_rate(tel.work_rate_ema))?;
+            writeln!(out, "  Net Rate:   {}", format_si_rate(tel.net_rate_ema))?;
         } else {
             writeln!(out, "  GPS:        Locked")?;
             writeln!(out, "  Work Rate:  Locked")?;
@@ -922,6 +961,7 @@ mod crash_telemetry_tests {
         println!("{}", report);
         assert!(report.contains("RUSTYLIFE CRASH REPORT"));
         assert!(report.contains("UNKNOWN"));
+        assert!(report.contains(" UTC]"));
     }
 
     #[test]
@@ -930,27 +970,36 @@ mod crash_telemetry_tests {
         let engine = SimulationEngine::new(space.clone(), 1);
 
         // Manipulate engine state
-        engine.generation.store(42, Ordering::SeqCst);
-        engine.living_count.store(100, Ordering::SeqCst);
+        engine.generation.store(1234567, Ordering::SeqCst);
+        engine.living_count.store(9876543, Ordering::SeqCst);
         *engine.current_generation_bounds.lock().unwrap() = Some(((-10, -5), (10, 5)));
 
         {
             let mut tel = engine.telemetry.lock().unwrap();
             tel.gps = 12.34;
-            tel.work_rate_ema = 56.78;
+            tel.work_rate_ema = 56789.01;
             tel.net_rate_ema = 90.12;
         }
 
         let report = capture_report(Some(&engine));
         println!("{}", report);
-        assert!(report.contains("Generation: 42"));
-        assert!(report.contains("Population: 100"));
+        assert!(report.contains("Generation: 1,234,567"));
+        assert!(report.contains("Population: 9,876,543"));
         assert!(report.contains("Bounds:     (-10, -5) to (10, 5)"));
-        assert!(report.contains("GPS:        12.34 / s"));
-        assert!(report.contains("Work Rate:  56.78 / s"));
-        assert!(report.contains("Net Rate:   90.12 / s"));
+        assert!(report.contains("GPS:        12.34 /s"));
+        assert!(report.contains("Work Rate:  56.79 K/s"));
+        assert!(report.contains("Net Rate:   90.12 /s"));
+        assert!(report.contains(" UTC]"));
 
         engine.shutdown();
+    }
+
+    #[test]
+    fn test_format_helpers() {
+        assert_eq!(format_with_commas(1234567), "1,234,567");
+        assert_eq!(format_si_rate(1234.56), "1.23 K/s");
+        assert_eq!(format_si_rate(0.79), "0.79 /s");
+        assert_eq!(format_si_rate(1000000.0), "1.00 M/s");
     }
 
     #[test]
