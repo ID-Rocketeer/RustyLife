@@ -81,7 +81,7 @@ fn wait_for_idle(engine: &SimulationEngine) {
     let start = std::time::Instant::now();
     // We wait for queue to be empty.
     // Note: If a Task is currently *executing* but queue is empty, in_flight > 0.
-    while engine.work_queue_in_flight() > 0 {
+    while !engine.is_stopped() {
         if start.elapsed().as_secs() > 5 {
             panic!(
                 "Timeout waiting for engine to idle. in_flight: {}",

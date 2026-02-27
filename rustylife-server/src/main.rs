@@ -232,13 +232,18 @@ impl UserActionHandler for ServerActionHandler {
         self.engine.seed(pattern);
     }
     fn request_state(&mut self, _gen: u64, viewport: Option<((i128, i128), (i128, i128))>) {
-        // Create an optimized fetch for visual updates
+        // Always sync running state — is_running must not be gated on viewport availability
+        // because egui may not call this with a viewport if the view hasn't changed.
+        {
+            let mut s = self.state.lock().unwrap();
+            s.is_running = !self.engine.is_stopped();
+        }
+
+        // Expensive viewport cell fetch only when caller provides a viewport
         if let Some(viewport) = viewport {
             let cells = self.engine.get_cells_in_rect(viewport.0, viewport.1);
             let mut s = self.state.lock().unwrap();
             s.viewport_cells = cells;
-
-            // Also grab atomic counters to keep UI responsive even if snapshots lag
             s.generation = self.engine.generation();
             s.population = self
                 .engine

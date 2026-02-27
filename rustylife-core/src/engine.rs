@@ -77,9 +77,11 @@ impl SnapshotStore {
 pub enum Tasks {
     SpreadBatch(usize, usize),
     CommitBatch(usize, usize),
+}
+
+pub enum EngineCommand {
     Start,
     StartGenerations(u64),
-    Stop,
     Step,
     Reset,
     Seed(String),
@@ -145,7 +147,6 @@ impl WorkQueue {
     }
 
     pub fn purge(&self) {
-        self.queue.push(Tasks::Stop);
         loop {
             if let crossbeam_deque::Steal::Empty = self.queue.steal() {
                 break;
@@ -290,6 +291,10 @@ pub struct Engine {
     pub active_pattern: Mutex<Option<String>>,
     pub io_tx: std::sync::mpsc::SyncSender<IoTask>,
     pub io_pool_rx: crossbeam_channel::Receiver<Vec<((i128, i128), u8)>>,
+
+    // Command Serialization
+    pub command_tx: crossbeam_channel::Sender<EngineCommand>,
+    pub command_rx: crossbeam_channel::Receiver<EngineCommand>,
 }
 
 pub struct CommitBuffer {
@@ -327,6 +332,7 @@ impl Engine {
 
         let (io_tx, io_rx) = std::sync::mpsc::sync_channel(2);
         let (io_pool_tx, io_pool_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
 
         let engine = Arc::new(Self {
             space,
@@ -356,6 +362,8 @@ impl Engine {
             transition_lock: Mutex::new(()),
             io_tx,
             io_pool_rx,
+            command_tx,
+            command_rx,
         });
 
         for i in 0..pool_size {
@@ -390,28 +398,58 @@ impl Engine {
 
     // Legacy methods usually expected by main.rs / tests
     pub fn start(&self) {
+        let _guard = self.transition_lock.lock().unwrap();
         if self.stopping.load(Ordering::SeqCst) {
-            self.work_queue.enqueue(Tasks::Start);
+            self.stopping.store(false, Ordering::SeqCst);
+            let _ = self.command_tx.send(EngineCommand::Start);
+            // We can't use Arc<Self> here easily, but process_commands takes it.
+            // However, we can use a temporary trick or just let the worker pick it up
+            // since Start initiates background work anyway.
+            // For Start, async is fine.
         }
     }
     pub fn stop(&self) {
+        // Immediate set without lock to ensure responsiveness
         self.stopping.store(true, Ordering::SeqCst);
-        self.work_queue.enqueue(Tasks::Stop);
     }
     pub fn step(&self) {
-        // Guard: Drop Step commands if engine is running
-        // This prevents GUIs from corrupting the simulation by sending Step while running
-        if !self.stopping.load(Ordering::SeqCst) {
-            // Engine is running - ignore Step command
-            return;
+        let _guard = self.transition_lock.lock().unwrap();
+        if self.stopping.load(Ordering::SeqCst) {
+            self.stopping.store(false, Ordering::SeqCst);
+            let _ = self.command_tx.send(EngineCommand::Step);
+            // Step initiates work, workers will pick it up.
         }
-        self.work_queue.enqueue(Tasks::Step);
     }
     pub fn reset(&self) {
-        self.work_queue.enqueue(Tasks::Reset);
+        let _guard = self.transition_lock.lock().unwrap();
+        if self.stopping.load(Ordering::SeqCst) {
+            let _ = self.command_tx.send(EngineCommand::Reset);
+            self.drain_command_queue_locked();
+        }
     }
     pub fn seed(&self, pattern: String) {
-        self.work_queue.enqueue(Tasks::Seed(pattern));
+        let _guard = self.transition_lock.lock().unwrap();
+        if self.stopping.load(Ordering::SeqCst) {
+            let _ = self.command_tx.send(EngineCommand::Seed(pattern));
+            self.drain_command_queue_locked();
+        }
+    }
+    pub fn start_generations(&self, count: u64) {
+        let _guard = self.transition_lock.lock().unwrap();
+        if self.stopping.load(Ordering::SeqCst) {
+            self.stopping.store(false, Ordering::SeqCst);
+            let _ = self.command_tx.send(EngineCommand::StartGenerations(count));
+        }
+    }
+    pub fn seed_and_start(&self, pattern: String, target_gen: Option<u64>) {
+        let _guard = self.transition_lock.lock().unwrap();
+        if self.stopping.load(Ordering::SeqCst) {
+            let target = target_gen.unwrap_or(u64::MAX);
+            self.stopping.store(false, Ordering::SeqCst);
+            let _ = self
+                .command_tx
+                .send(EngineCommand::SeedAndStart(pattern, target));
+        }
     }
 
     /// Update the simulation space with a new pattern synchronously.
@@ -456,12 +494,6 @@ impl Engine {
         self.target_generation.store(target, Ordering::SeqCst);
     }
 
-    pub fn seed_and_start(&self, pattern: String, generations: Option<u64>) {
-        let target = generations.unwrap_or(u64::MAX);
-        self.work_queue
-            .enqueue(Tasks::SeedAndStart(pattern, target));
-    }
-
     pub fn register_pattern(&self, pattern: crate::PatternInfo) {
         if let Ok(mut lock) = self.patterns.lock() {
             lock.push(pattern);
@@ -470,6 +502,8 @@ impl Engine {
 
     pub fn is_stopped(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
+            && self.work_queue.in_flight_count() == 0
+            && self.command_rx.is_empty()
     }
 
     pub fn shutdown(&self) {
@@ -485,14 +519,23 @@ impl Engine {
         self.tainted.store(true, Ordering::SeqCst);
     }
 
-    pub fn start_generations(&self, generations: u64) {
-        let current = self.generation();
-        self.set_target_generation(current + generations);
-        self.start();
-    }
-
     pub fn work_queue_in_flight(&self) -> usize {
         self.work_queue.in_flight_count()
+    }
+
+    pub fn wait_for_quiescence(&self, timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if self.work_queue_in_flight() == 0 && self.is_stopped() {
+                // Check once more after a tiny sleep to avoid transient 0s
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                if self.work_queue_in_flight() == 0 {
+                    return true;
+                }
+            }
+            std::thread::yield_now();
+        }
+        false
     }
 
     pub fn get_cells_in_rect(
@@ -542,6 +585,13 @@ impl Engine {
                 if engine.stop_signal.load(Ordering::Relaxed) {
                     break;
                 }
+
+                // If no work, check for commands if we are the "designated" worker
+                // or just if there's no tasks in flight anywhere
+                if engine.work_queue_in_flight() == 0 {
+                    engine.process_commands();
+                }
+
                 std::thread::yield_now();
             }
         }
@@ -555,143 +605,128 @@ impl Engine {
             Tasks::CommitBatch(start, end) => {
                 Self::commit_bucket(start, end, engine, thread_idx);
             }
-            Tasks::Start | Tasks::StartGenerations(_) => {
-                Self::handle_transition(engine, &task);
-            }
-            Tasks::Step => {
-                Self::handle_transition(engine, &task);
-            }
-            Tasks::Reset => {
-                // Part 1: Drop if engine is actively running.
-                // `stopping == false` means new generations are being initiated.
-                // Both UI clients already gate the Reset button while running;
-                // this is the engine-level enforcement of the same contract.
-                if !engine.stopping.load(Ordering::SeqCst) {
-                    return;
-                }
-
-                // Part 2: Requeue if commit workers from the last generation are
-                // still in-flight. `stopping == true` is an intent flag, NOT a
-                // quiescence guarantee — CommitBatch tasks may still be running
-                // and updating living_count via fetch_add/fetch_sub. We must be
-                // the sole running task before touching any shared state.
-                if engine.work_queue.in_flight_count.load(Ordering::SeqCst) > 1 {
-                    engine.work_queue.enqueue(Tasks::Reset);
-                    return;
-                }
-
-                engine.space.clear();
-                engine.generation.store(0, Ordering::SeqCst);
-
-                // Reload active pattern if available
-                let maybe_rle = engine.active_pattern.lock().unwrap().clone();
-                if let Some(rle) = maybe_rle {
-                    engine.space.seed_from_rle(0, 0, &rle);
-                }
-
-                let pop = engine.space.total_population();
-                engine.living_count.store(pop, Ordering::SeqCst);
-                engine.stopping.store(true, Ordering::SeqCst);
-
-                // Initial bounds for Gen 0
-                *engine.current_generation_bounds.lock().unwrap() = engine.space.bounds();
-
-                Self::capture_state(engine, false);
-            }
-
-            Tasks::Stop => {
-                engine.stopping.store(true, Ordering::SeqCst);
-            }
-            Tasks::Seed(pattern_input) => {
-                engine.space.clear();
-                engine.generation.store(0, Ordering::SeqCst);
-                let rle = {
-                    let patterns = engine.patterns.lock().unwrap();
-                    patterns
-                        .iter()
-                        .find(|p| p.name == pattern_input)
-                        .map(|p| p.rle.clone())
-                        .unwrap_or(pattern_input)
-                };
-
-                // Save as active pattern for Reset
-                *engine.active_pattern.lock().unwrap() = Some(rle.clone());
-
-                engine.space.seed_from_rle(0, 0, &rle);
-                let pop = engine.space.total_population();
-                engine.living_count.store(pop, Ordering::SeqCst);
-                engine.stopping.store(true, Ordering::SeqCst);
-
-                // Initial bounds for Gen 0
-                *engine.current_generation_bounds.lock().unwrap() = engine.space.bounds();
-
-                Self::capture_state(engine, false);
-            }
-            Tasks::SeedAndStart(pattern_input, generation) => {
-                engine.space.clear();
-                engine.generation.store(0, Ordering::SeqCst);
-                let rle = {
-                    let patterns = engine.patterns.lock().unwrap();
-                    patterns
-                        .iter()
-                        .find(|p| p.name == pattern_input)
-                        .map(|p| p.rle.clone())
-                        .unwrap_or(pattern_input)
-                };
-
-                // Save as active pattern for Reset
-                *engine.active_pattern.lock().unwrap() = Some(rle.clone());
-
-                engine.space.seed_from_rle(0, 0, &rle);
-                let pop = engine.space.total_population();
-                engine.living_count.store(pop, Ordering::SeqCst);
-                engine.target_generation.store(generation, Ordering::SeqCst);
-                engine.stopping.store(false, Ordering::SeqCst);
-
-                // Initial bounds for Gen 0
-                *engine.current_generation_bounds.lock().unwrap() = engine.space.bounds();
-
-                Self::capture_state(engine, true);
-                // Trigger start task to actually begin processing loop
-                engine.work_queue.enqueue(Tasks::Start);
-            }
         }
     }
 
-    fn handle_transition(engine: &Arc<Self>, task: &Tasks) {
-        let _guard = engine.transition_lock.lock().unwrap();
-        match task {
-            Tasks::Start | Tasks::StartGenerations(_) | Tasks::Step => {
-                engine.space.advance_generation();
-                engine.generation.fetch_add(1, Ordering::SeqCst);
+    pub fn process_commands(&self) {
+        if self.command_rx.is_empty() {
+            return;
+        }
 
-                // Telemetry
-                {
-                    // If we are resuming from a stopped state, reset the tick to avoid measuring idle time
-                    if engine.stopping.load(Ordering::Acquire) {
-                        engine.telemetry.lock().unwrap().reset();
+        if let Ok(_guard) = self.transition_lock.try_lock() {
+            self.drain_command_queue_locked();
+        }
+    }
+
+    fn drain_command_queue_locked(&self) {
+        while let Ok(cmd) = self.command_rx.try_recv() {
+            let in_flight = self.work_queue_in_flight();
+
+            match cmd {
+                EngineCommand::Start | EngineCommand::StartGenerations(_) | EngineCommand::Step => {
+                    if self.stopping.load(Ordering::SeqCst) {
+                        continue;
+                    }
+
+                    match cmd {
+                        EngineCommand::StartGenerations(count) => {
+                            let current = self.generation.load(Ordering::SeqCst);
+                            self.target_generation
+                                .store(current + count, Ordering::SeqCst);
+                        }
+                        EngineCommand::Step => {
+                            let current = self.generation.load(Ordering::SeqCst);
+                            self.target_generation.store(current + 1, Ordering::SeqCst);
+                        }
+                        EngineCommand::Start => {
+                            self.target_generation.store(u64::MAX, Ordering::SeqCst);
+                        }
+                        _ => {}
+                    }
+
+                    if in_flight == 0 {
+                        self.initiate_spread();
                     }
                 }
-
-                if matches!(task, Tasks::Start | Tasks::StartGenerations(_)) {
-                    engine.stopping.store(false, Ordering::SeqCst);
+                EngineCommand::Reset => {
+                    if !self.stopping.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    self.space.clear();
+                    self.space.mask.reset();
+                    self.generation.store(0, Ordering::SeqCst);
+                    let maybe_rle = self.active_pattern.lock().unwrap().clone();
+                    if let Some(rle) = maybe_rle {
+                        self.space.seed_from_rle(0, 0, &rle);
+                    }
+                    let pop = self.space.total_population();
+                    self.living_count.store(pop, Ordering::SeqCst);
+                    self.stopping.store(true, Ordering::SeqCst);
+                    *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
+                    self.capture_state(false);
                 }
-
-                if engine.stopping.load(Ordering::SeqCst)
-                    && !matches!(task, Tasks::Step | Tasks::StartGenerations(_))
-                {
-                    // Stop
-                } else {
-                    Self::initiate_spread(engine);
+                EngineCommand::Seed(pattern_input) => {
+                    if !self.stopping.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    self.space.clear();
+                    self.space.mask.reset();
+                    self.generation.store(0, Ordering::SeqCst);
+                    let rle = {
+                        let patterns = self.patterns.lock().unwrap();
+                        patterns
+                            .iter()
+                            .find(|p| p.name == pattern_input)
+                            .map(|p| p.rle.clone())
+                            .unwrap_or(pattern_input)
+                    };
+                    *self.active_pattern.lock().unwrap() = Some(rle.clone());
+                    self.space.seed_from_rle(0, 0, &rle);
+                    let pop = self.space.total_population();
+                    self.living_count.store(pop, Ordering::SeqCst);
+                    self.stopping.store(true, Ordering::SeqCst);
+                    *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
+                    self.capture_state(false);
+                }
+                EngineCommand::SeedAndStart(pattern_input, target_gen) => {
+                    if self.stopping.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    self.space.clear();
+                    self.space.mask.reset();
+                    self.generation.store(0, Ordering::SeqCst);
+                    let rle = {
+                        let patterns = self.patterns.lock().unwrap();
+                        patterns
+                            .iter()
+                            .find(|p| p.name == pattern_input)
+                            .map(|p| p.rle.clone())
+                            .unwrap_or(pattern_input)
+                    };
+                    *self.active_pattern.lock().unwrap() = Some(rle.clone());
+                    self.space.seed_from_rle(0, 0, &rle);
+                    let pop = self.space.total_population();
+                    self.living_count.store(pop, Ordering::SeqCst);
+                    self.target_generation.store(target_gen, Ordering::SeqCst);
+                    self.stopping.store(false, Ordering::SeqCst);
+                    *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
+                    self.telemetry.lock().unwrap().reset();
+                    // Emit a Gen-0 snapshot so subscribers see the initial state
+                    // before the first generation completes.
+                    self.capture_state(true);
+                    self.initiate_spread();
                 }
             }
-            _ => {}
         }
     }
 
-    fn initiate_spread(engine: &Arc<Self>) {
-        let bucket_count = engine.space.storage().buckets.len();
-        let total_batches = std::cmp::max(1, engine.pool_size * 4);
+    fn initiate_spread(&self) {
+        if self.stopping.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let bucket_count = self.space.storage().buckets.len();
+        let total_batches = std::cmp::max(1, self.pool_size * 4);
         let batch_size = bucket_count.div_ceil(total_batches);
 
         let mut tasks = Vec::new();
@@ -701,13 +736,12 @@ impl Engine {
         }
 
         // Initialize phase counter before enqueuing
-        engine.scratchpad.clear(engine.generation());
+        self.scratchpad.clear(self.generation());
         // Reset per-step metrics
-        engine.work.store(0, Ordering::SeqCst); // Work is also per-step for telemetry?
-        // dead_block_count is cumulative for pruning, don't reset.
+        self.work.store(0, Ordering::SeqCst);
 
-        engine.phase_counter.store(tasks.len(), Ordering::SeqCst);
-        engine.work_queue.enqueue_batch(tasks);
+        self.phase_counter.store(tasks.len(), Ordering::SeqCst);
+        self.work_queue.enqueue_batch(tasks);
     }
 
     fn spread_bucket(
@@ -718,8 +752,8 @@ impl Engine {
     ) {
         let storage = engine.space.storage();
         let masks = engine.space.read();
-        let last_mask = masks.last_state_mask();
-        let read_idx = match last_mask {
+        let current_mask = masks.current_state_mask();
+        let read_idx = match current_mask {
             1 => 0,
             2 => 1,
             4 => 2,
@@ -827,18 +861,18 @@ impl Engine {
         // Transition Logic safe against races
         let prev = engine.phase_counter.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
-            Self::initiate_commit(engine);
+            engine.initiate_commit();
         }
     }
 
-    fn initiate_commit(engine: &Arc<Self>) {
+    fn initiate_commit(&self) {
         // Reset counters for the new generation calculation
-        engine.net.store(0, Ordering::SeqCst);
-        engine.dead_block_count.store(0, Ordering::SeqCst);
-        *engine.current_generation_bounds.lock().unwrap() = None;
+        self.net.store(0, Ordering::SeqCst);
+        self.dead_block_count.store(0, Ordering::SeqCst);
+        *self.current_generation_bounds.lock().unwrap() = None;
 
-        let bucket_count = engine.space.storage().buckets.len();
-        let total_batches = std::cmp::max(1, engine.pool_size * 4);
+        let bucket_count = self.space.storage().buckets.len();
+        let total_batches = std::cmp::max(1, self.pool_size * 4);
         let batch_size = bucket_count.div_ceil(total_batches);
 
         let mut tasks = Vec::new();
@@ -847,8 +881,8 @@ impl Engine {
             tasks.push(Tasks::CommitBatch(i, end));
         }
 
-        engine.phase_counter.store(tasks.len(), Ordering::SeqCst);
-        engine.work_queue.enqueue_batch(tasks);
+        self.phase_counter.store(tasks.len(), Ordering::SeqCst);
+        self.work_queue.enqueue_batch(tasks);
     }
 
     fn commit_bucket(
@@ -858,10 +892,10 @@ impl Engine {
         thread_idx: usize,
     ) {
         let storage = engine.space.storage();
-        let (current_idx, last_idx) = {
+        let (current_idx, next_idx) = {
             let masks = engine.space.read();
             let current_mask = masks.current_state_mask();
-            let last_mask = masks.last_state_mask();
+            let next_mask = masks.next_state_mask();
 
             let current_idx = match current_mask {
                 1 => 0,
@@ -869,13 +903,13 @@ impl Engine {
                 4 => 2,
                 _ => 0,
             };
-            let last_idx = match last_mask {
+            let next_idx = match next_mask {
                 1 => 0,
                 2 => 1,
                 4 => 2,
                 _ => 0,
             };
-            (current_idx, last_idx)
+            (current_idx, next_idx)
         };
 
         #[derive(Default, Clone, Copy)]
@@ -975,13 +1009,11 @@ impl Engine {
                     neighbors.ne,
                     neighbors.sw,
                     neighbors.se,
-                    last_idx,
                     current_idx,
+                    next_idx,
                 );
 
-                if let Some(((bx1, by1), (bx2, by2))) =
-                    node.block.exact_bounds_in_state(current_idx)
-                {
+                if let Some(((bx1, by1), (bx2, by2))) = node.block.exact_bounds_in_state(next_idx) {
                     let world_x1 = (node.bx << 3) + bx1;
                     let world_y1 = (node.by << 3) + by1;
                     let world_x2 = (node.bx << 3) + bx2;
@@ -1036,46 +1068,52 @@ impl Engine {
         let prev = engine.phase_counter.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
             // Generation is complete
-            let gen_count = engine.generation.load(Ordering::SeqCst);
-            // Check if we reached target generation
+            let curr_gen = engine.generation.load(Ordering::SeqCst);
             let target = engine.target_generation.load(Ordering::SeqCst);
-            if gen_count >= target {
+            if curr_gen + 1 >= target {
                 engine.stopping.store(true, Ordering::SeqCst);
             }
 
-            let is_running = !engine.stopping.load(Ordering::SeqCst);
-            Self::capture_state(engine, is_running);
+            // Advance generation to commit the data we just calculated
+            engine.space.advance_generation();
+            engine.generation.fetch_add(1, Ordering::SeqCst);
 
-            if is_running {
-                engine.work_queue.enqueue(Tasks::Step);
+            let stopping_at_capture = engine.stopping.load(Ordering::SeqCst);
+            engine.capture_state(!stopping_at_capture);
+
+            // Process commands (Reset, Seed, etc)
+            engine.process_commands();
+
+            if !engine.stopping.load(Ordering::SeqCst) {
+                engine.initiate_spread();
+            } else if !stopping_at_capture {
+                // If we said we were running at line 1082 but now we are stopping
+                // (due to a command or target gen reach), emit the actual stopped state.
+                engine.capture_state(false);
             }
         }
     }
 
-    fn capture_state(engine: &Arc<Self>, is_running: bool) {
-        let generation = engine.generation.load(Ordering::SeqCst);
-        let work = engine.work.load(Ordering::SeqCst); // Accumulator
-        let net = engine.net.load(Ordering::SeqCst);
+    fn capture_state(&self, is_running: bool) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let work = self.work.load(Ordering::SeqCst); // Accumulator
+        let net = self.net.load(Ordering::SeqCst);
 
         // Check for Pruning Trigger
-        let dead_blocks = engine.dead_block_count.load(Ordering::SeqCst);
+        let dead_blocks = self.dead_block_count.load(Ordering::SeqCst);
         if dead_blocks > 1000 {
             // Prune dead blocks to maintain performance
-            engine.space.prune();
+            self.space.prune();
             // Reset dead block count
-            engine.dead_block_count.store(0, Ordering::SeqCst);
+            self.dead_block_count.store(0, Ordering::SeqCst);
         }
 
         // Update Telemetry
-        engine
-            .telemetry
-            .lock()
-            .unwrap()
-            .update(generation, work, net);
+        self.telemetry.lock().unwrap().update(generation, work, net);
 
         // Extract cells using Memory Pooling
-        let mut vec = engine.io_pool_rx.try_recv().unwrap_or_else(|_| Vec::new());
-        let living_count = engine.living_count.load(Ordering::SeqCst) as usize;
+        let mut vec = self.io_pool_rx.try_recv().unwrap_or_else(|_| Vec::new());
+        let living_count = self.living_count.load(Ordering::SeqCst) as usize;
 
         // Ensure capacity with 25% headroom if reallocation is needed
         if vec.capacity() < living_count {
@@ -1085,14 +1123,14 @@ impl Engine {
             vec.reserve(reserve_amount);
         }
 
-        engine.space.collect_all_states_into(&mut vec);
+        self.space.collect_all_states_into(&mut vec);
 
         // Capture telemetry synchronously
         let (gps, work_rate, net_rate) = {
-            let t = engine.telemetry.lock().unwrap();
+            let t = self.telemetry.lock().unwrap();
             (t.gps, t.work_rate_ema, t.net_rate_ema)
         };
-        let bounds = *engine.current_generation_bounds.lock().unwrap();
+        let bounds = *self.current_generation_bounds.lock().unwrap();
         let telemetry = crate::Telemetry {
             generation,
             population: living_count as u64,
@@ -1104,7 +1142,7 @@ impl Engine {
         };
 
         // Fire to async I/O worker
-        let _ = engine.io_tx.send(IoTask::Snapshot {
+        let _ = self.io_tx.send(IoTask::Snapshot {
             generation,
             cells: vec,
             telemetry,

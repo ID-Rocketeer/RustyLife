@@ -15,9 +15,10 @@ This document tracks future features, investigations, and known issues that have
 - [ ] **Timestamp in Crash Report:** Ensure all crash reports (Panic and OOM) include the system wall-clock time. This is critical for identifying exactly when a failure occurred during unattended long-duration runs.
 
 ## Engine & Testing Hardening
-- [ ] **"Corner Case" Verification Tests:** Implement a battery of tests that specifically verify engine stability for patterns spanning multiple block boundaries (e.g., the 4-corners configuration).
+- [x] **"Corner Case" Verification Tests:** Implement a battery of tests that specifically verify engine stability for patterns spanning multiple block boundaries (e.g., the 4-corners configuration).
 - [ ] **High-Load Test Stability:** Harden the integration test suite (`ipc_integration.rs`) to handle high system load scenarios without timing out or failing due to port contention (e.g., dynamic port allocation, unique target directories).
-- [ ] **Windows Suspension Prevention (Advanced):** Investigate `PowerCreateRequest` as a more robust alternative to `SetThreadExecutionState` for preventing system sleep under aggressive power policies.
+- [x] **Windows Suspension Prevention (Advanced):** Investigate `PowerCreateRequest` as a more robust alternative to `SetThreadExecutionState` for preventing system sleep under aggressive power policies.
+- [ ] **Engine Quiescence Hardening:** Decouple `in_flight_count` decrement from synchronous IO operations. Currently, the "last worker" of a generation can block in `capture_state` if the telemetry channel is full, causing non-deterministic test timeouts (`InFlight: 1`) in high-contention CI environments.
 
 ## Memory Management
 - [ ] **Deep Memory Compaction Pass:** Research and implement a "Deep Cleaning" pass for the `BlockArena` and related structures. This passthrough could be triggered by the OOM catcher to reclaim memory from sparse block distributions, potentially involving a pause in simulation and client requests during the compaction cycle.
@@ -50,6 +51,7 @@ This document tracks future features, investigations, and known issues that have
 - [ ] **Web GUI Viewport Width Constraints:** Investigate an issue where the simulation canvas/viewport fails to expand to the full width of the screen on certain external displays.
 - [ ] **Zone-Based Click-to-Pan:** Implement viewport panning via clicks on defined zones (orthogonal and diagonal).
     - **Behavior:** Discriminate between a single click and a press-and-hold (to preserve existing drag-and-drop). A click in a zone moves the viewport by 1/2 of its dimension in that direction. Diagonal movement results in 1/4 context overlap.
+- [ ] **Verify Web GUI Control State Logic:** Audit the Web GUI (`dashboard.js`) control enable/disable logic to ensure it matches the behavior recently implemented in the native/network GUI: the Stop button must transition correctly after a stop, the Patterns selector must be disabled while the simulation is running, and Step/Reset must only become active once the engine is fully quiescent. Confirm `is_running` is derived from a reliable, authoritative source (not solely from a snapshot that may be delayed at high GPS).
 
 ## Architecture & Testing
 - [ ] **B-tree/Quad-tree Research:** Discuss and evaluate the potential impact of moving from the current binary-tree implementation to a B-tree structure with four internal nodes (effectively a quad-tree). This research should consider the memory footprint, traversal efficiency for sparse grids, and impact on SIMD-aligned block lookups.

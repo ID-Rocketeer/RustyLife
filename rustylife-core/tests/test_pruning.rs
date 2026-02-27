@@ -17,6 +17,16 @@ use rustylife_core::engine::SimulationEngine;
 use rustylife_core::space::SimulationSpace;
 use std::sync::Arc;
 
+fn wait_for_idle(engine: &SimulationEngine) {
+    let start = std::time::Instant::now();
+    while !engine.is_stopped() {
+        if start.elapsed().as_secs() > 5 {
+            panic!("Timeout waiting for engine idle");
+        }
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn test_block_pruning() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
@@ -54,16 +64,9 @@ fn test_block_pruning() {
         SimulationEngine::run_worker(engine_clone, 0);
     });
 
-    engine.step(); // Trigger one step? No, step enqueues 1 step.
-    // We want to run many.
-    // But `engine.run()` runs until stopped? No, `run_worker` processes queue.
-    // We can use `engine.step()` 60 times.
-
     for _ in 0..60 {
         engine.step();
-        while engine.work_queue_in_flight() > 0 {
-            std::thread::yield_now();
-        }
+        wait_for_idle(&engine);
     }
 
     // Now glider should be in a new block. Old block (0,0) should be dead.
@@ -98,19 +101,13 @@ fn test_block_pruning() {
     assert!(count_blocks() > 0);
 
     engine.step();
-    while engine.work_queue_in_flight() > 0 {
-        std::thread::yield_now();
-    }
+    wait_for_idle(&engine);
 
     // Step 2 to ensure history clears (3 buffers!)
     engine.step();
-    while engine.work_queue_in_flight() > 0 {
-        std::thread::yield_now();
-    }
+    wait_for_idle(&engine);
     engine.step();
-    while engine.work_queue_in_flight() > 0 {
-        std::thread::yield_now();
-    }
+    wait_for_idle(&engine);
 
     space.prune();
     assert_eq!(
@@ -136,9 +133,7 @@ fn test_pruning_headroom() {
     // Run enough steps to create dead blocks but keep some alive
     for _ in 0..40 {
         engine.step();
-        while engine.work_queue_in_flight() > 0 {
-            std::thread::yield_now();
-        }
+        wait_for_idle(&engine);
     }
 
     // Capture pre-prune state

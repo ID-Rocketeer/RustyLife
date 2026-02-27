@@ -27,8 +27,12 @@ fn test_repro_run_stop_reset_hang() {
     // 1. Seed
     engine.seed("r-pentomino".to_string());
 
-    // Wait for seed
-    while engine.generation() == 0 && engine.work_queue_in_flight() > 0 {
+    // Wait for seed to finish (seed now drains synchronously, but wait anyway)
+    let start_seed = std::time::Instant::now();
+    while !engine.is_stopped() {
+        if start_seed.elapsed().as_secs() > 2 {
+            panic!("Seed timed out");
+        }
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -40,24 +44,23 @@ fn test_repro_run_stop_reset_hang() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    // 3. Stop
+    // 3. Stop and wait for proper quiescence
     engine.stop();
-    assert!(engine.is_stopped());
 
-    // Wait for quiescence
     let start_wait = std::time::Instant::now();
-    while engine.work_queue_in_flight() > 0 {
+    while !engine.is_stopped() {
         if start_wait.elapsed().as_secs() > 2 {
             panic!("Engine failed to quiesce after Stop!");
         }
         thread::sleep(Duration::from_millis(10));
     }
+    assert!(engine.is_stopped(), "Engine should be fully stopped");
 
     // 4. Reset (This is where it hangs)
     println!("Triggering Reset...");
     engine.reset();
 
-    // Reset should reset generation to 0
+    // Reset should reset generation to 0 — it is synchronous so should be immediate
     let start_reset = std::time::Instant::now();
     while engine.generation() != 0 {
         if start_reset.elapsed().as_secs() > 2 {

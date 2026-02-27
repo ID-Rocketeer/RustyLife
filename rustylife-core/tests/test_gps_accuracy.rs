@@ -70,11 +70,11 @@ fn test_repro_gps_doubling() {
     println!("Reported GPS: {}", reported_gps);
     println!("Expected GPS (gen/time): {}", expected_gps);
 
-    // If the bug exists, reported_gps will be ~2x expected_gps
-    // We expect it to be significantly higher than expected_gps.
-    // Use a conservative threshold like 1.5x.
+    // If the bug exists, reported_gps will be ~2x expected_gps.
+    // We use a 1.5x threshold to tolerate EMA warmup and CPU scheduling jitter
+    // during parallel test runs, while still catching true GPS doubling bugs.
     assert!(
-        reported_gps < expected_gps * 1.2,
+        reported_gps < expected_gps * 1.5,
         "Reported GPS ({}) is significantly higher than real GPS ({})",
         reported_gps,
         expected_gps

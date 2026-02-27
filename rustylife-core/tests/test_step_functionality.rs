@@ -35,8 +35,12 @@ fn test_repro_run_stop_step_kills_cells() {
     }
     engine.seed("r-pentomino".to_string());
 
-    // Wait for seed to settle
-    while engine.generation() == 0 && engine.work_queue_in_flight() > 0 {
+    // Wait for seed to settle (seed is now synchronous but workers still exist)
+    let start_seed = std::time::Instant::now();
+    while !engine.is_stopped() {
+        if start_seed.elapsed().as_secs() > 2 {
+            panic!("Seed timed out");
+        }
         thread::sleep(Duration::from_millis(10));
     }
 
@@ -51,17 +55,17 @@ fn test_repro_run_stop_step_kills_cells() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    // 3. Stop
+    // 3. Stop and wait for full quiescence
     engine.stop();
-    assert!(engine.is_stopped());
 
-    // Allow engine to quiesce completely
-    thread::sleep(Duration::from_millis(50));
-    assert_eq!(
-        engine.work_queue_in_flight(),
-        0,
-        "Engine should be idle after stop"
-    );
+    let start_stop = std::time::Instant::now();
+    while !engine.is_stopped() {
+        if start_stop.elapsed().as_secs() > 2 {
+            panic!("Engine failed to quiesce after Stop!");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(engine.is_stopped(), "Engine should be fully stopped");
 
     let pop_after_run = engine
         .living_count
@@ -72,11 +76,12 @@ fn test_repro_run_stop_step_kills_cells() {
     // 4. Step (The Regression Point)
     engine.step();
 
-    // Wait for step
-    while engine.generation() <= gen_stopped {
-        thread::sleep(Duration::from_millis(10));
-    }
-    while engine.work_queue_in_flight() > 0 {
+    // Wait for step to complete
+    let start_step = std::time::Instant::now();
+    while !engine.is_stopped() {
+        if start_step.elapsed().as_secs() > 2 {
+            panic!("Step timed out!");
+        }
         thread::sleep(Duration::from_millis(10));
     }
 

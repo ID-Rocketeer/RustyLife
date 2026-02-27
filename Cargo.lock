@@ -3149,11 +3149,13 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "crossbeam-deque",
+ "crossbeam-utils",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "ts-rs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

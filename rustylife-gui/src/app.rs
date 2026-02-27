@@ -249,25 +249,31 @@ impl eframe::App for RustyLifeApp {
                                 self.projection.offset = Vec2::ZERO;
                             }
 
-                            ui.menu_button(
-                                egui::RichText::new("Patterns").size(15.0).strong(),
-                                |ui| {
-                                    ui.set_min_width(120.0);
-                                    let patterns = self.state.lock().unwrap().patterns.clone();
-                                    for p in patterns {
-                                        if ui
-                                            .button(p.name.clone())
-                                            .on_hover_text(p.description)
-                                            .clicked()
-                                        {
-                                            self.handler.seed(p.name);
-                                            ui.close_menu();
+                            ui.add_enabled_ui(!is_running, |ui| {
+                                ui.menu_button(
+                                    egui::RichText::new("Patterns").size(15.0).strong(),
+                                    |ui| {
+                                        ui.set_min_width(120.0);
+                                        let patterns = self.state.lock().unwrap().patterns.clone();
+                                        for p in patterns {
+                                            if ui
+                                                .button(p.name.clone())
+                                                .on_hover_text(p.description)
+                                                .clicked()
+                                            {
+                                                self.handler.seed(p.name);
+                                                ui.close_menu();
+                                            }
                                         }
-                                    }
-                                },
-                            )
-                            .response
-                            .on_hover_text("Load a pattern");
+                                    },
+                                )
+                                .response
+                                .on_hover_text(if is_running {
+                                    "Stop the simulation before changing patterns"
+                                } else {
+                                    "Load a pattern"
+                                });
+                            });
 
                             if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
                                 self.projection.zoom_at_center(1.0);
@@ -660,6 +666,10 @@ impl eframe::App for RustyLifeApp {
                             color,
                         );
                     }
+
+                    // Poll running state every frame so `is_running` stays current even when
+                    // the viewport hasn't changed (no debounced call below fires).
+                    self.handler.request_state(generation, None);
 
                     // Viewport Synchronization (Debounced)
                     // Request data from handler

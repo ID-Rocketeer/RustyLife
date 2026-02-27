@@ -21,6 +21,52 @@ use std::sync::atomic::Ordering;
 
 use std::sync::{Condvar, Mutex};
 
+#[cfg(windows)]
+#[allow(dead_code)]
+fn create_minidump(filename: &str) {
+    use std::fs::File;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        MiniDumpWithFullMemory, MiniDumpWriteDump,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
+
+    println!(
+        "Reproduction detected! Capturing minidump to {}...",
+        filename
+    );
+    let file = File::create(filename).expect("Failed to create dump file");
+    let handle = file.as_raw_handle() as isize;
+
+    unsafe {
+        let process_handle = GetCurrentProcess();
+        let process_id = GetCurrentProcessId();
+
+        let success = MiniDumpWriteDump(
+            process_handle,
+            process_id,
+            handle as _,
+            MiniDumpWithFullMemory,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+
+        if success != 0 {
+            println!("SUCCESS: Minidump captured.");
+        } else {
+            println!("FAILED: Could not capture minidump.");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn create_minidump(_filename: &str) {
+    // TODO Investigate non-terminating core dump creation on Linux
+    println!("Minidump capture not supported on this platform.");
+}
+
 struct TestSync {
     state: Mutex<(u64, bool)>, // (generation, is_stopped)
     cond: Condvar,
@@ -47,6 +93,11 @@ impl TestSync {
                 panic!("Timed out waiting for generation {}", target);
             }
         }
+    }
+
+    fn reset(&self) {
+        let mut guard = self.state.lock().unwrap();
+        *guard = (0, false);
     }
 }
 
@@ -455,27 +506,21 @@ fn test_engine_remains_stable_under_immediate_stop_stress() {
     engine.stop();
 
     // 3. Wait for quiescence (all tasks complete)
-    // Note: We can't rely on cell count because if the engine advanced a generation
-    // before stopping, cells will be in the old generation (count=0 in current).
-    // We just need to ensure all in-flight tasks complete.
-    let mut success = false;
-    let start = std::time::Instant::now();
-    while start.elapsed().as_secs() < 5 {
-        let flight = engine.work_queue_in_flight();
-        if flight == 0 {
-            success = true;
-            break;
-        }
-        std::thread::yield_now();
-    }
+    let success = engine.wait_for_quiescence(std::time::Duration::from_secs(5));
 
     if !success {
-        let count = engine.get_cells_in_rect((-100, -100), (100, 100)).len();
         let flight = engine.work_queue_in_flight();
-        println!(
-            "Stress Test Failed. Final State - Count: {}, InFlight: {}",
-            count, flight
-        );
+        println!("Stress Test Failed. Final State - InFlight: {}", flight);
+        // The following lines were added to troubleshoot an issue where
+        // multiple start/stop cycles could create an unsafe state in the engine.
+        // This logic captures a minidump of the engine state when the test
+        // detects a hang, enabling post-mortem thread analysis.
+        // let timestamp = std::time::SystemTime::now()
+        //     .duration_since(std::time::UNIX_EPOCH)
+        //     .unwrap()
+        //     .as_secs();
+        // let dump_name = format!("engine_quiesce_hang_{}.dmp", timestamp);
+        // create_minidump(&dump_name);
     }
 
     assert!(success, "Engine failed to quiesce after immediate stop");
@@ -644,6 +689,7 @@ fn test_reset_stability() {
 
     // 5. Start again
     // Now safe to start as Queue is empty
+    sync.reset();
     engine.start();
 
     // Wait for engine to verify progress
@@ -704,6 +750,7 @@ fn test_engine_seed_processing() {
     engine.step();
 
     // Wait for at least 1 generation to ensure processing
+    subscriber.reset();
     subscriber.wait_for_generation(1);
 
     // Wait for quiescence
