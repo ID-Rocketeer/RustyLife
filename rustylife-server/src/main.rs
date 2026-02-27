@@ -77,9 +77,13 @@ pub struct Args {
     #[arg(long)]
     pub stay_awake: bool,
 
-    /// Enable periodic status logging to the console (every 20 minutes)
+    /// Enable periodic status logging to the console
     #[arg(short, long)]
     pub log: bool,
+
+    /// Frequency of periodic status logging in minutes (default 20)
+    #[arg(long, default_value_t = 20.0)]
+    pub log_interval: f64,
 }
 
 fn to_cartesian_bounds(
@@ -154,19 +158,27 @@ impl EngineSubscriber for PresenterSubscriber {
 /// A subscriber that logs status updates to the console periodically.
 pub struct LoggingSubscriber {
     last_log: Mutex<Option<std::time::Instant>>,
+    last_snapshot_time: Mutex<Option<std::time::Instant>>,
+    min_interval: Mutex<std::time::Duration>,
+    max_interval: Mutex<std::time::Duration>,
+    log_interval: std::time::Duration,
 }
 
 impl LoggingSubscriber {
-    pub fn new() -> Self {
+    pub fn new(interval_mins: f64) -> Self {
         Self {
             last_log: Mutex::new(None),
+            last_snapshot_time: Mutex::new(None),
+            min_interval: Mutex::new(std::time::Duration::MAX),
+            max_interval: Mutex::new(std::time::Duration::ZERO),
+            log_interval: std::time::Duration::from_secs_f64(interval_mins * 60.0),
         }
     }
 }
 
 impl Default for LoggingSubscriber {
     fn default() -> Self {
-        Self::new()
+        Self::new(20.0)
     }
 }
 
@@ -176,13 +188,30 @@ impl EngineSubscriber for LoggingSubscriber {
         _data: Arc<Vec<u8>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        let mut last_log = self.last_log.lock().unwrap();
         let now = std::time::Instant::now();
 
-        // Log if it's the first snapshot (Generation 0 benchmark) or every 20 minutes
+        // 1. Update Inter-generation Interval tracking
+        if telemetry.is_running {
+            let mut last_snap = self.last_snapshot_time.lock().unwrap();
+            if let Some(prev) = *last_snap {
+                let interval = now.duration_since(prev);
+
+                let mut min = self.min_interval.lock().unwrap();
+                let mut max = self.max_interval.lock().unwrap();
+                *min = (*min).min(interval);
+                *max = (*max).max(interval);
+            }
+            *last_snap = Some(now);
+        } else {
+            // Engine is idle. Reset interval tracking to avoid measuring the "stopped" period.
+            *self.last_snapshot_time.lock().unwrap() = None;
+        }
+
+        // 2. Check for Periodic Logging (using the provided interval)
+        let mut last_log = self.last_log.lock().unwrap();
         let should_log = match *last_log {
             None => true,
-            Some(last) => now.duration_since(last) >= std::time::Duration::from_secs(20 * 60),
+            Some(last) => now.duration_since(last) >= self.log_interval,
         };
 
         if should_log {
@@ -193,16 +222,37 @@ impl EngineSubscriber for LoggingSubscriber {
                 "None".to_string()
             };
 
+            let min_max_str = {
+                let min = self.min_interval.lock().unwrap();
+                let max = self.max_interval.lock().unwrap();
+                if *min == std::time::Duration::MAX {
+                    "Min/Max: N/A".to_string()
+                } else {
+                    format!(
+                        "Min/Max: {:.2} ms / {:.2} ms",
+                        min.as_secs_f64() * 1000.0,
+                        max.as_secs_f64() * 1000.0
+                    )
+                }
+            };
+
             println!(
-                "{} Gen: {}, Pop: {}, GPS: {}, Work Rate: {}, Bounds: {}",
+                "{} Gen: {}, Pop: {}, GPS: {}, Work Rate: {}, {}, Bounds: {}",
                 timestamp,
                 format_with_commas(telemetry.generation),
                 format_with_commas(telemetry.population),
                 format_si_rate(telemetry.gps),
                 format_si_rate(telemetry.work_rate),
+                min_max_str,
                 bounds_str
             );
+
+            // Reset tracking for next window
             *last_log = Some(now);
+            *self.min_interval.lock().unwrap() = std::time::Duration::MAX;
+            *self.max_interval.lock().unwrap() = std::time::Duration::ZERO;
+            // Note: we do NOT reset last_snapshot_time here, as the user specified:
+            // "When we log a message we do want to reset the min/max as previously described, but there should be no issue with the subsequent interval since we'll have a valid timestamp from the last update."
         }
         true
     }
@@ -483,7 +533,7 @@ fn main() {
     engine.add_subscriber(subscriber);
 
     if args.log {
-        engine.add_subscriber(Arc::new(LoggingSubscriber::new()));
+        engine.add_subscriber(Arc::new(LoggingSubscriber::new(args.log_interval)));
     }
 
     let gui_state = if args.gui {
@@ -1023,8 +1073,112 @@ mod crash_telemetry_tests {
         assert!(report.contains("Work Rate:  Locked"));
         assert!(report.contains("Net Rate:   Locked"));
 
-        drop(_tel_lock);
         drop(_bounds_lock);
         engine.shutdown();
+    }
+
+    #[test]
+    fn test_logging_subscriber_performance_tracking() {
+        let sub = LoggingSubscriber::new(20.0);
+        let telemetry = rustylife_core::Telemetry {
+            generation: 1,
+            population: 100,
+            is_running: true,
+            gps: 0.0,
+            work_rate: 0.0,
+            net_rate: 0.0,
+            bounds: None,
+        };
+
+        // 1st snapshot: Sets last_snapshot_time, but no interval yet
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), telemetry);
+        assert_eq!(*sub.min_interval.lock().unwrap(), std::time::Duration::MAX);
+
+        // Simulated delay
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // 2nd snapshot: Calculates interval, updates min/max IMMEDIATELY (two snapshots = one interval)
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), telemetry);
+        let min = *sub.min_interval.lock().unwrap();
+        let max = *sub.max_interval.lock().unwrap();
+        assert!(min > std::time::Duration::ZERO);
+        assert!(min < std::time::Duration::from_millis(50));
+        assert_eq!(min, max);
+
+        // 3rd snapshot: Update min/max again
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), telemetry);
+        let min2 = *sub.min_interval.lock().unwrap();
+        let max2 = *sub.max_interval.lock().unwrap();
+        assert_eq!(min2, min); // Previous min was ~10ms
+        assert!(max2 > max); // New max is ~20ms
+
+        // Test Idle Reset: If is_running = false, last_snapshot_time should be cleared
+        let mut idle_telemetry = telemetry;
+        idle_telemetry.is_running = false;
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), idle_telemetry);
+        assert!(sub.last_snapshot_time.lock().unwrap().is_none());
+
+        // Next start: Should NOT compute a delta from the pre-idle time
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut running_telemetry = telemetry;
+        running_telemetry.is_running = true;
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), running_telemetry);
+        // last_snapshot_time is now Some(now), but no interval recorded yet
+        assert_eq!(*sub.max_interval.lock().unwrap(), max2); // Max hasn't changed from last update
+    }
+
+    #[test]
+    fn test_logging_subscriber_reset_after_log() {
+        // Use an interval of 0 to trigger logging on every call for testing resets
+        let sub = LoggingSubscriber::new(0.0);
+        let telemetry = rustylife_core::Telemetry {
+            generation: 1,
+            population: 100,
+            is_running: true,
+            gps: 0.0,
+            work_rate: 0.0,
+            net_rate: 0.0,
+            bounds: None,
+        };
+
+        // 1. First snapshot - establishes baseline
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), telemetry);
+
+        // 2. Second snapshot - records interval AND triggers log (due to 0 interval)
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        sub.on_snapshot_available(std::sync::Arc::new(vec![]), telemetry);
+
+        // The stats should have been reset AFTER the log trigger
+        assert_eq!(*sub.min_interval.lock().unwrap(), std::time::Duration::MAX);
+        assert_eq!(*sub.max_interval.lock().unwrap(), std::time::Duration::ZERO);
+
+        // However, last_snapshot_time should NOT have been reset (to allow clean interval to next snap)
+        assert!(sub.last_snapshot_time.lock().unwrap().is_some());
+
+        // 3. Test fractional interval: 0.1 minutes = 6 seconds
+        let _sub_fractional = LoggingSubscriber::new(0.0001);
+    }
+
+    #[test]
+    fn test_args_log_interval() {
+        use clap::Parser;
+
+        // Default value
+        let args = Args::parse_from(["rustylife-server"]);
+        assert_eq!(args.log_interval, 20.0);
+
+        // Custom integer value
+        let args = Args::parse_from(["rustylife-server", "--log-interval", "5"]);
+        assert_eq!(args.log_interval, 5.0);
+
+        // Fractional value
+        let args_result = Args::try_parse_from(["rustylife-server", "--log-interval", "1.5"]);
+        assert!(
+            args_result.is_ok(),
+            "Failed to parse fractional interval: {:?}",
+            args_result.err()
+        );
+        assert_eq!(args_result.unwrap().log_interval, 1.5);
     }
 }

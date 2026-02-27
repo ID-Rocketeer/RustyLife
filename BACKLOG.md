@@ -11,7 +11,7 @@ This document tracks future features, investigations, and known issues that have
 ## Performance & Telemetry
 - [x] **Fix GPS "Double-Count" Bug:** The current GPS calculation in `engine.rs` reports values nearly 2.0x higher than wall-clock progress.
     - *Fix: Refactored `Telemetry` to use a `reset()` method on cycle start, removed redundant updates, and treated Generation 0 as a reset event to ensure accurate initial GPS.*
-- [ ] **Automated Performance Baselines:** Implement automated tracking of performance metrics over long-duration runs. This includes tracking the **minimum and maximum inter-generation intervals** in the logger to detect performance "slips" or environmental hitches.
+- [x] **Automated Performance Baselines:** Implement automated tracking of performance metrics over long-duration runs. This includes tracking the **minimum and maximum inter-generation intervals** in the logger to detect performance "slips" or environmental hitches.
 - [x] **Timestamp in Crash Report:** Ensure all crash reports (Panic and OOM) include the system wall-clock time. This is critical for identifying exactly when a failure occurred during unattended long-duration runs.
 
 ## Engine & Testing Hardening
@@ -38,7 +38,8 @@ This document tracks future features, investigations, and known issues that have
 
 ## CLI & Integrated Tools
 - [x] **Infrastructure**: Generate error/exit for unrecognized or unimplemented CLI switches.
-- [ ] **Configurable Diagnostic Intervals:** Add a `--log-interval <MINUTES>` flag to allow customization of the periodic status logging frequency (currently hardcoded to 20m).
+- [x] **Configurable Diagnostic Intervals:** Add a `--log-interval <MINUTES>` flag to allow customization of the periodic status logging frequency (currently hardcoded to 20m).
+    - *Implementation Drafted: See [implementation_plan_logging_interval.md](file:///c:/Users/spcfo/.gemini/antigravity/brain/3df84e2e-db39-44da-8de7-5519fb0f92c4/implementation_plan_logging_interval.md)*
 - [ ] **Integrated Plotting Capability:** Implement a `--plot` switch for both server and client (and a separate web interface on port 8081). This would allow real-time graphing of simulation metrics (Population, GPS, Work) using free tools like Google Charts. `--gui` and `--plot` should be independently togglable.
 
 ## GUI Issues

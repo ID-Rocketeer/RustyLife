@@ -89,7 +89,8 @@ You need **Rust** installed on your machine.
     - `-p`, `--port <PORT>`: HTTP port for the dashboard (default: 8080)
     - `-i`, `--ipc-port <PORT>`: TCP port for IPC simulation control (default: 9001)
     - `--stay-awake`: Prevent Windows from suspending the system when locked (Windows only)
-    - `-l`, `--log`: Enable periodic status logging (Console output every 20 minutes)
+    - `-l`, `--log`: Enable periodic status logging
+    - `--log-interval <MINUTES>`: Frequency of periodic status logging (default: 20, supports fractional values like 0.5)
     - `-g`, `--generations <N>`: Run for exactly N generations then exit (Profiling)
     - `--help`: Display available commands and exit
 
