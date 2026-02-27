@@ -9,9 +9,8 @@ This document tracks future features, investigations, and known issues that have
 - [x] **GPL-3.0 Licensing:** Implement the GNU General Public License v3.0 text in the repository and add copyright headers (`Copyright (C) 2026 Steven P. Collins. All rights reserved.`) to all source files. Add a rule to rules.md to ensure this is maintained.
 
 ## Performance & Telemetry
-- [ ] **Fix GPS "Double-Count" Bug:** The current GPS calculation in `engine.rs` reports values nearly 2.0x higher than wall-clock progress.
-    - **Root Cause:** `Telemetry::update` is called twice per generation cycle (once at `handle_transition` and once at `capture_state`), with each call counting as a full `1.0` cycle. This includes UI snapshot timing in the telemetry and doubles the effective rate.
-    - **Fix Strategy:** Implement a single-timestamp-per-cycle rule. Capture a single timestamp when a `Start` or `Step` task begins, and compute the delta only once at the end of the full cycle in `capture_state`. Use the previous completion time as the next start time to ensure "idle" or snapshot time is properly accounted for in the wall-clock average. **Note:** Operations like the "Deep Memory Compaction Pass" should reset the start timestamp to avoid penalizing the GPS for emergency maintenance work.
+- [x] **Fix GPS "Double-Count" Bug:** The current GPS calculation in `engine.rs` reports values nearly 2.0x higher than wall-clock progress.
+    - *Fix: Refactored `Telemetry` to use a `reset()` method on cycle start and removed the redundant `update()` in `handle_transition`.*
 - [ ] **Automated Performance Baselines:** Implement automated tracking of performance metrics over long-duration runs. This includes tracking the **minimum and maximum inter-generation intervals** in the logger to detect performance "slips" or environmental hitches.
 - [ ] **Timestamp in Crash Report:** Ensure all crash reports (Panic and OOM) include the system wall-clock time. This is critical for identifying exactly when a failure occurred during unattended long-duration runs.
 

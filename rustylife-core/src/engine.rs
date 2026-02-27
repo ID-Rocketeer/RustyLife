@@ -182,6 +182,12 @@ impl Telemetry {
             last_net_count: 0,
         }
     }
+
+    /// Resets the last tick to the current time.
+    /// Used when starting or resuming the engine to avoid measuring idle time in the GPS.
+    pub fn reset(&mut self) {
+        self.last_tick = std::time::Instant::now();
+    }
 }
 
 impl Default for Telemetry {
@@ -191,8 +197,19 @@ impl Default for Telemetry {
 }
 
 impl Telemetry {
-    pub fn update(&mut self, _generation: u64, work_count: u64, net_count: i64) {
+    pub fn update(&mut self, generation: u64, work_count: u64, net_count: i64) {
         let now = std::time::Instant::now();
+
+        // Special Case: Generation 0 is an initialization/reset event.
+        // We do not want to report a fictitious GPS based on pattern load time.
+        if generation == 0 {
+            self.gps = 0.0;
+            self.work_rate_ema = 0.0;
+            self.net_rate_ema = 0.0;
+            self.last_tick = now;
+            return;
+        }
+
         let delta = now.duration_since(self.last_tick).as_secs_f64();
 
         if delta > 0.0 {
@@ -646,14 +663,14 @@ impl Engine {
         match task {
             Tasks::Start | Tasks::StartGenerations(_) | Tasks::Step => {
                 engine.space.advance_generation();
-                let gen_count = engine.generation.fetch_add(1, Ordering::SeqCst) + 1;
+                engine.generation.fetch_add(1, Ordering::SeqCst);
 
                 // Telemetry
                 {
-                    let work = engine.work.load(Ordering::Relaxed);
-                    let net = engine.net.load(Ordering::Relaxed);
-                    let mut tel = engine.telemetry.lock().unwrap();
-                    tel.update(gen_count, work, net);
+                    // If we are resuming from a stopped state, reset the tick to avoid measuring idle time
+                    if engine.stopping.load(Ordering::Acquire) {
+                        engine.telemetry.lock().unwrap().reset();
+                    }
                 }
 
                 if matches!(task, Tasks::Start | Tasks::StartGenerations(_)) {

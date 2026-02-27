@@ -26,6 +26,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ## Licensing
 - **License Maintenance**: All source files (`.rs`, `.js`, `.ts`, etc.) must maintain the GPL-3.0 copyright headers. No new files should be committed without these headers once the licensing task is complete.
+    - **Exclusion**: Generated files (e.g., in `rustylife-server/static/types/` via `ts-rs`) are exempt from this requirement.
 
 ## Development Workflow (TDD)
 - **Strict TDD**: Before implementing any new logic or fixing a bug, a failing test must be written and verified to fail.
@@ -37,6 +38,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 - **Show Results**: Show the passing test result to the user.
 - **Commit Approval**: Only commit after the user approves the passing result.
 - **Uncommitted Work**: Remind the user about uncommitted work when starting work on a new phase/task. Do not leave the current task in an uncommitted state without explicit permission to pivot.
+- **Test Naming**: Long-term tests must be named to describe the *expected behavior* when the test passes (e.g., `test_gps_accuracy.rs`). Names should NOT be based on the failure or bug being reproduced.
 
 ## Verification
 - **Test Integrity**: All tests must pass before any task is considered complete.
