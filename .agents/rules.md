@@ -42,4 +42,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ## Verification
 - **Test Integrity**: All tests must pass before any task is considered complete.
+- **Formatting**: `cargo fmt --check` must pass before any commit approval is requested.
+- **Linting**: `cargo clippy -- -D warnings` must be run and all warnings addressed before any task is considered complete.
 - **System Load Awareness**: In environments with high system load (e.g. running multiple or large simulations), be aware that integration tests with strict timeouts may fail. Favor logical verification over strict timing when possible.
