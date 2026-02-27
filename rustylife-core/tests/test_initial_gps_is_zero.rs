@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use rustylife_core::engine::{Engine, EngineSubscriber, SimulationEngine};
+use rustylife_core::engine::{EngineSubscriber, SimulationEngine};
 use rustylife_core::space::SimulationSpace;
 use std::sync::{Arc, Mutex};
 
