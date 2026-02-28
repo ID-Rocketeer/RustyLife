@@ -18,7 +18,6 @@ This document tracks future features, investigations, and known issues that have
 - [x] **"Corner Case" Verification Tests:** Implement a battery of tests that specifically verify engine stability for patterns spanning multiple block boundaries (e.g., the 4-corners configuration).
 - [ ] **High-Load Test Stability:** Harden the integration test suite (`ipc_integration.rs`) to handle high system load scenarios without timing out or failing due to port contention (e.g., dynamic port allocation, unique target directories).
 - [x] **Windows Suspension Prevention (Advanced):** Investigate `PowerCreateRequest` as a more robust alternative to `SetThreadExecutionState` for preventing system sleep under aggressive power policies.
-- [ ] **Engine Quiescence Hardening:** Decouple `in_flight_count` decrement from synchronous IO operations. Currently, the "last worker" of a generation can block in `capture_state` if the telemetry channel is full, causing non-deterministic test timeouts (`InFlight: 1`) in high-contention CI environments.
 
 ## Memory Management
 - [ ] **Deep Memory Compaction Pass:** Research and implement a "Deep Cleaning" pass for the `BlockArena` and related structures. This passthrough could be triggered by the OOM catcher to reclaim memory from sparse block distributions, potentially involving a pause in simulation and client requests during the compaction cycle.

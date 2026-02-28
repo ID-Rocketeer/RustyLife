@@ -168,6 +168,7 @@ pub struct Telemetry {
     pub net_rate_ema: f64,
     pub last_work_count: u64,
     pub last_net_count: i64,
+    pub last_generation: u64,
 }
 
 impl Telemetry {
@@ -181,6 +182,7 @@ impl Telemetry {
             net_rate_ema: 0.0,
             last_work_count: 0,
             last_net_count: 0,
+            last_generation: 0,
         }
     }
 
@@ -213,7 +215,8 @@ impl Telemetry {
 
         let delta = now.duration_since(self.last_tick).as_secs_f64();
 
-        if delta > 0.0 {
+        if delta > 0.0 && generation > self.last_generation {
+            self.last_generation = generation;
             let cycles = 1.0;
             let instantaneous_gps = cycles / delta;
 
