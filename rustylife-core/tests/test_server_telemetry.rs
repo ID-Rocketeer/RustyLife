@@ -116,3 +116,46 @@ fn wait_for_idle(engine: &SimulationEngine) {
         std::thread::yield_now();
     }
 }
+
+#[test]
+fn test_telemetry_gps_anomaly_during_prune() {
+    let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+    let engine = SimulationEngine::new(space, 4);
+
+    let subscriber = Arc::new(TelemetrySubscriber {
+        packets: Mutex::new(Vec::new()),
+    });
+    engine.add_subscriber(subscriber.clone());
+
+    // Plant 1005 simple isolated cells so they all die in generation 1, triggering a prune.
+    for i in 0..1005 {
+        engine.place_cell(i * 8, 0);
+    }
+
+    // Step and wait
+    engine.step();
+    wait_for_idle(&engine);
+
+    // We expect the first snapshot (Generation 1) to be delivered.
+    // The engine has finished computation, but the bg_presenter thread needs a moment to deliver the snapshot.
+    let mut found_rate = None;
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let packets = subscriber.packets.lock().unwrap();
+        if let Some((_, wr, _)) = packets.iter().find(|(g, _, _)| *g == 1) {
+            found_rate = Some(*wr);
+            break;
+        }
+    }
+
+    assert!(found_rate.is_some(), "Generation 1 snapshot not received");
+    let work_rate = found_rate.unwrap();
+
+    // Reasonable work rate for 1005 cells on Gen 1 should be a few thousand or million / second.
+    // If it's over 10 Billion (10,000,000,000.0), then the time delta was incorrectly zeroed.
+    assert!(
+        work_rate < 10_000_000_000.0,
+        "Work Rate spiked anomalously high ({:.2} / s), indicating a timer reset bug during a prune!",
+        work_rate
+    );
+}

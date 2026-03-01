@@ -968,3 +968,53 @@ fn test_metrics_calculation() {
     );
     assert_eq!(net, 0, "Net change should be 0 for stable oscillator");
 }
+
+#[test]
+fn test_worker_can_process_prune_bucket_task() {
+    // TDD failing test for parallel scrubber
+    // This will fail to compile until `Tasks::PruneBucket` is added.
+    let space = std::sync::Arc::new(rustylife_core::space::SimulationSpace::new(
+        rustylife_core::BUCKET_COUNT,
+    ));
+    let engine = TestContext::new(
+        std::sync::Arc::clone(&space),
+        rustylife_core::THREAD_POOL_SIZE,
+    );
+
+    // Enqueue a PruneBucket task manually
+    engine
+        .work_queue
+        .enqueue(rustylife_core::engine::Tasks::PruneBucket(0));
+
+    // Wait for quiescence to ensure the worker thread picked it up and processed it
+    let success = engine.wait_for_quiescence(std::time::Duration::from_secs(5));
+    assert!(success, "Engine failed to quiesce after PruneBucket task");
+}
+
+#[test]
+fn test_parallel_pruning_completes_successfully() {
+    // TDD failing test to reproduce the deadlock when Pruning is triggered during a generation
+    let space = std::sync::Arc::new(rustylife_core::space::SimulationSpace::new(
+        rustylife_core::BUCKET_COUNT,
+    ));
+    let engine = TestContext::new(
+        std::sync::Arc::clone(&space),
+        rustylife_core::THREAD_POOL_SIZE,
+    );
+
+    // Place an isolated cell in 1005 distinct blocks.
+    // A block is 8x8, so spacing by 8 guarantees they are in different blocks.
+    for i in 0..1005 {
+        engine.place_cell(i * 8, 0);
+    }
+
+    // Run 1 step. The isolated cells all die immediately (underpopulation).
+    // This generates 1005 dead blocks reliably during the commit phase.
+    // At the end of Commit, the worker thread will call `capture_state`
+    // and trigger the parallel prune while it is STILL executing the Commit task.
+    engine.step();
+
+    // If it deadlocks, this will timeout and return false.
+    let success = engine.wait_for_quiescence(std::time::Duration::from_secs(3));
+    assert!(success, "Engine deadlocked during parallel pruning!");
+}

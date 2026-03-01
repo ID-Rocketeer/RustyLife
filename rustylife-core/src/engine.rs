@@ -77,6 +77,7 @@ impl SnapshotStore {
 pub enum Tasks {
     SpreadBatch(usize, usize),
     CommitBatch(usize, usize),
+    PruneBucket(usize),
 }
 
 pub enum EngineCommand {
@@ -608,6 +609,13 @@ impl Engine {
             Tasks::CommitBatch(start, end) => {
                 Self::commit_bucket(start, end, engine, thread_idx);
             }
+            Tasks::PruneBucket(bucket_idx) => {
+                let mut bucket = engine.space.storage().buckets[bucket_idx]
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner());
+                bucket.prune();
+                engine.phase_counter.fetch_sub(1, Ordering::SeqCst);
+            }
         }
     }
 
@@ -1102,17 +1110,53 @@ impl Engine {
         let work = self.work.load(Ordering::SeqCst); // Accumulator
         let net = self.net.load(Ordering::SeqCst);
 
+        // Update Telemetry FIRST to accurately measure the computation time of this generation
+        self.telemetry.lock().unwrap().update(generation, work, net);
+
         // Check for Pruning Trigger
         let dead_blocks = self.dead_block_count.load(Ordering::SeqCst);
         if dead_blocks > 1000 {
-            // Prune dead blocks to maintain performance
-            self.space.prune();
+            // Prune dead blocks to maintain performance in parallel
+            let bucket_count = self.space.storage().buckets.len();
+
+            // Set the phase counter to exactly the number of prune tasks
+            self.phase_counter.store(bucket_count, Ordering::SeqCst);
+
+            let mut tasks = Vec::with_capacity(bucket_count);
+            for i in 0..bucket_count {
+                tasks.push(Tasks::PruneBucket(i));
+            }
+            self.work_queue.enqueue_batch(tasks);
+
+            // Wait for workers to finish, helping out to guarantee no deadlock if pool size is 1
+            // We wait on phase_counter because in_flight_count includes the current Commit task
+            while self.phase_counter.load(Ordering::SeqCst) > 0 {
+                if let crossbeam_deque::Steal::Success(Tasks::PruneBucket(idx)) =
+                    self.work_queue.queue.steal()
+                {
+                    let mut bucket = self.space.storage().buckets[idx]
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    bucket.prune();
+                    self.work_queue
+                        .in_flight_count
+                        .fetch_sub(1, Ordering::SeqCst);
+                    self.phase_counter.fetch_sub(1, Ordering::SeqCst);
+                } else {
+                    std::thread::yield_now();
+                }
+            }
+
             // Reset dead block count
             self.dead_block_count.store(0, Ordering::SeqCst);
-        }
 
-        // Update Telemetry
-        self.telemetry.lock().unwrap().update(generation, work, net);
+            // Re-capture start timestamp as per TDD requirement
+            // to ensure GPS metrics aren't penalized for the scrub pause
+            // Note: Since we ALREADY updated the telemetry for this generation above,
+            // resetting the timer here correctly sets the start time for the NEXT generation
+            // so that it doesn't include the pruning pause!
+            self.telemetry.lock().unwrap().reset();
+        }
 
         // Extract cells using Memory Pooling
         let mut vec = self.io_pool_rx.try_recv().unwrap_or_else(|_| Vec::new());
