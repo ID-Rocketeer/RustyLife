@@ -1208,7 +1208,7 @@ impl Engine {
         }) = io_rx.recv()
         {
             // Serialize
-            let packet_data = crate::encode_binary_packet(generation, &cells);
+            let packet_data = crate::encode_binary_packet(generation, &cells, telemetry);
             let packet = Arc::new(packet_data);
 
             // Store

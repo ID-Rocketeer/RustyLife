@@ -835,6 +835,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 let engine = state.engine.clone();
                                 let _ = tokio::task::spawn_blocking(move || {
                                     engine.stop();
+                                    // Wait for worker threads to drain so the telemetry correctly reports is_running = false
+                                    engine.wait_for_quiescence(std::time::Duration::from_millis(50));
                                 })
                                 .await;
 
@@ -985,7 +987,11 @@ async fn handle_get_state(
                 packet.cells().collect()
             };
 
-            rustylife_core::encode_binary_packet(packet.generation, &filtered_cells)
+            rustylife_core::encode_binary_packet(
+                packet.generation,
+                &filtered_cells,
+                packet.telemetry,
+            )
         }
         Err(e) => {
             Response::Error(format!("Failed to decode snapshot for filtering: {}", e)).to_bytes()

@@ -67,6 +67,8 @@ impl RustyLifeApp {
 
 impl eframe::App for RustyLifeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Allow background network threads to request UI repaints upon packet arrival
+        self.state.lock().unwrap().repaint_ctx = Some(ctx.clone());
         if self.first_frame {
             crate::style::configure_style(ctx);
 
@@ -667,10 +669,6 @@ impl eframe::App for RustyLifeApp {
                         );
                     }
 
-                    // Poll running state every frame so `is_running` stays current even when
-                    // the viewport hasn't changed (no debounced call below fires).
-                    self.handler.request_state(generation, None);
-
                     // Viewport Synchronization (Debounced)
                     // Request data from handler
                     let current_viewport = ((min_x, min_y), (max_x, max_y));
@@ -686,8 +684,6 @@ impl eframe::App for RustyLifeApp {
                     }
                 });
         });
-
-        ctx.request_repaint();
     }
 }
 

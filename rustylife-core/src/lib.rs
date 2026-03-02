@@ -110,6 +110,7 @@ pub enum Response {
     BinaryStateHeader {
         generation: u64,
         record_count: u64,
+        telemetry: Telemetry,
     },
 }
 
@@ -177,10 +178,15 @@ pub trait SimulationPresenter: Send + Sync {
 /// Hybrid protocol packet:
 /// [Header: JSON] + [Payload: Binary]
 /// This function constructs the full byte buffer.
-pub fn encode_binary_packet(generation: u64, cells: &[((i128, i128), u8)]) -> Vec<u8> {
+pub fn encode_binary_packet(
+    generation: u64,
+    cells: &[((i128, i128), u8)],
+    telemetry: Telemetry,
+) -> Vec<u8> {
     let header = Response::BinaryStateHeader {
         generation,
         record_count: cells.len() as u64,
+        telemetry,
     };
 
     let json = serde_json::to_vec(&header).unwrap();
@@ -221,6 +227,7 @@ pub fn encode_binary_packet(generation: u64, cells: &[((i128, i128), u8)]) -> Ve
 pub struct BinaryPacket<'a> {
     pub generation: u64,
     pub record_count: u64,
+    pub telemetry: Telemetry,
     payload: &'a [u8],
 }
 
@@ -283,6 +290,7 @@ pub fn decode_binary_packet(buf: &[u8]) -> Result<BinaryPacket<'_>, String> {
         Response::BinaryStateHeader {
             generation,
             record_count,
+            telemetry,
         } => {
             // 2. Verify Binary Payload
             let payload_start = consumed;
@@ -312,6 +320,7 @@ pub fn decode_binary_packet(buf: &[u8]) -> Result<BinaryPacket<'_>, String> {
             Ok(BinaryPacket {
                 generation,
                 record_count,
+                telemetry,
                 payload,
             })
         }
@@ -328,7 +337,16 @@ mod tests {
         let cells = vec![((0, 0), 0b11), ((1, 1), 0b10)];
 
         let generation_count = 101;
-        let packet_buf = encode_binary_packet(generation_count, &cells);
+        let mock_telemetry = Telemetry {
+            generation: generation_count,
+            population: 2,
+            is_running: true,
+            gps: 0.0,
+            work_rate: 0.0,
+            net_rate: 0.0,
+            bounds: None,
+        };
+        let packet_buf = encode_binary_packet(generation_count, &cells, mock_telemetry);
 
         let decoded = decode_binary_packet(&packet_buf).expect("Failed to decode");
 
@@ -341,7 +359,16 @@ mod tests {
     #[test]
     fn test_checksum_failure() {
         let cells = vec![((0, 0), 0b11)];
-        let packet_buf = encode_binary_packet(1, &cells);
+        let mock_telemetry = Telemetry {
+            generation: 1,
+            population: 1,
+            is_running: true,
+            gps: 0.0,
+            work_rate: 0.0,
+            net_rate: 0.0,
+            bounds: None,
+        };
+        let packet_buf = encode_binary_packet(1, &cells, mock_telemetry);
 
         let mut corrupted_buf = packet_buf;
         // Corrupt the packet (last byte)

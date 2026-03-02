@@ -29,6 +29,7 @@ pub struct AppState {
     pub is_connected: bool,
     pub patterns: Vec<rustylife_core::PatternInfo>,
     pub bounds: Option<((i128, i128), (i128, i128))>,
+    pub repaint_ctx: Option<egui::Context>,
 }
 
 impl Default for AppState {
@@ -46,6 +47,7 @@ impl Default for AppState {
             is_connected: false,
             patterns: Vec::new(),
             bounds: None,
+            repaint_ctx: None,
         }
     }
 }
@@ -79,6 +81,10 @@ impl SimulationPresenter for AppState {
         self.work_rate = telemetry.work_rate;
         self.net_rate = telemetry.net_rate;
         self.bounds = telemetry.bounds;
+
+        if let Some(ctx) = &self.repaint_ctx {
+            ctx.request_repaint();
+        }
     }
 
     fn update_bounds(&mut self, bounds: Option<((i128, i128), (i128, i128))>) {

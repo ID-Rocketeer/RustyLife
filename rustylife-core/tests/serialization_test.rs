@@ -31,3 +31,28 @@ fn test_request_serialization() {
     let deserialized_seed: Request = serde_json::from_str(&json_seed).unwrap();
     assert_eq!(seed, deserialized_seed);
 }
+
+#[test]
+fn test_binary_packet_with_telemetry() {
+    let cells = vec![((1, 2), 0b11), ((3, 4), 0b10)];
+    let generation = 100;
+    let telemetry = rustylife_core::Telemetry {
+        generation: 100,
+        population: 50,
+        is_running: true,
+        gps: 120.5,
+        work_rate: 10_000.0,
+        net_rate: 0.0,
+        bounds: Some(((-10, -10), (10, 10))),
+    };
+
+    let encoded = rustylife_core::encode_binary_packet(generation, &cells, telemetry);
+    let decoded = rustylife_core::decode_binary_packet(&encoded).expect("Failed to decode");
+
+    assert_eq!(decoded.generation, generation);
+    assert_eq!(decoded.record_count, 2);
+    assert_eq!(decoded.telemetry, telemetry);
+
+    let decoded_cells: Vec<_> = decoded.cells().collect();
+    assert_eq!(decoded_cells, cells);
+}

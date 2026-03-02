@@ -109,10 +109,6 @@ async fn main() -> anyhow::Result<()> {
                 let mut next_request_needed = false;
                 let mut latest_generation = 0;
 
-                // Cache telemetry/bounds from SnapshotAvailable, apply when BinaryStateHeader arrives
-                // Telemetry Ring Buffer (Zero Allocation)
-                let mut telemetry_cache: [Option<rustylife_core::Telemetry>; 256] = [None; 256];
-
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
                 loop {
@@ -140,8 +136,8 @@ async fn main() -> anyhow::Result<()> {
                                     rustylife_core::Response::SnapshotAvailable { telemetry } => {
                                         latest_generation = telemetry.generation;
 
-                                        // Store in ring buffer for later atomic update with cells
-                                        telemetry_cache[(telemetry.generation % 256) as usize] = Some(telemetry);
+                                        // We no longer need to cache this telemetry for rendering,
+                                        // since it will be fully embedded in the BinaryStateHeader.
 
                                         // We can still update bounds immediately if we want "predicted" bounds,
                                         // or wait for the sync. User specified atomic update.
@@ -170,24 +166,13 @@ async fn main() -> anyhow::Result<()> {
                                         if let Ok(packet) = rustylife_core::decode_binary_packet(&full_packet) {
                                             let mut s = state_clone.lock().unwrap();
 
-                                            // Synchronize with cached telemetry
-                                            let idx = (packet.generation % 256) as usize;
-                                            if let Some(telemetry) = telemetry_cache[idx].as_ref() {
-                                                if telemetry.generation == packet.generation {
-                                                    s.update_state(packet, *telemetry);
-                                                } else {
-                                                    // Stale telemetry from a past generation cycle (256 steps ago)
-                                                    if packet.generation > 0 {
-                                                        println!("Warning: Telemetry cache generation mismatch (Expected {}, found {})", packet.generation, telemetry.generation);
-                                                    }
-                                                }
-                                            } else {
-                                                // Fallback if telemetry announcement was missed/dropped
-                                                // (Shouldn't happen on reliable TCP, but for robustness).
-                                                // Silence this for Gen 0 to avoid boatload of startup/reset spam.
-                                                if packet.generation > 0 {
-                                                    println!("Warning: No cached telemetry for Gen {}", packet.generation);
-                                                }
+                                            // Directly update the state with the embedded telemetry from the packet
+                                            let embedded_telemetry = packet.telemetry;
+                                            s.update_state(packet, embedded_telemetry);
+
+                                            // Prompt the Egui thread to render this newly received frame
+                                            if let Some(ctx) = &s.repaint_ctx {
+                                                ctx.request_repaint();
                                             }
                                         }
 
@@ -213,12 +198,31 @@ async fn main() -> anyhow::Result<()> {
                                     rustylife_core::Response::Ok => {
                                         // Silent No-Op (e.g. from GetState on a missing snapshot)
                                         pending_request = false;
+                                        if next_request_needed {
+                                            next_request_needed = false;
+                                            let viewport = {
+                                                state_clone.lock().unwrap().target_viewport
+                                            };
+                                            let req = Request::GetState { generation: latest_generation, viewport };
+                                            let _ = writer.write_all(&req.to_bytes()).await;
+                                            pending_request = true;
+                                        }
                                     }
                                 }
                             }
                         }
                         Some(req) = rx.recv() => {
-                            if writer.write_all(&req.to_bytes()).await.is_err() {
+                            if let Request::GetState { generation, .. } = &req {
+                                if !pending_request {
+                                    pending_request = true;
+                                    if writer.write_all(&req.to_bytes()).await.is_err() {
+                                        break;
+                                    }
+                                } else {
+                                    latest_generation = *generation;
+                                    next_request_needed = true;
+                                }
+                            } else if writer.write_all(&req.to_bytes()).await.is_err() {
                                 break;
                             }
                         }

@@ -51,15 +51,50 @@ let lastRenderedGen = -1n;
 let pendingRequest = false;
 let nextRequestPending = false;
 let debounceTimeout = null;
+let expectedEpoch = 0;
+let pendingRequestEpoch = 0;
 
-// Telemetry State (Server-Side)
-let pendingTelemetry = new Map(); // Generation -> Telemetry
 // Panning State
 let offsetX = 0;
 let offsetY = 0;
 let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
+
+let latestTelemetry = null;
+
+function uiLoop() {
+    if (latestTelemetry) {
+        const meta = latestTelemetry;
+        latestTelemetry = null; // consume
+
+        const total = meta.population !== undefined ? BigInt(meta.population) : 0n;
+        countEl.innerText = total.toLocaleString();
+
+        const workRate = meta.work_rate || 0;
+        workEl.innerText = formatSI(workRate, 3, false);
+
+        const netRate = meta.net_rate || 0;
+        netEl.innerText = formatSI(netRate, 3, true);
+
+        const gps = meta.gps || 0;
+        gpsEl.innerText = formatSI(gps, 3, false);
+
+        const bounds = meta.bounds;
+        if (bounds) {
+            const [[minX, minY], [maxX, maxY]] = bounds;
+            boundsEl.innerText = `[ (${fmtCoord(minX, 9, true)}, ${fmtCoord(minY, 9, true)}) → (${fmtCoord(maxX, 9, true)}, ${fmtCoord(maxY, 9, true)}) ]`;
+            const width = Math.abs(maxX - minX) + 1;
+            const height = Math.abs(maxY - minY) + 1;
+            expanseEl.innerText = `[ ${fmtNum(width, 9, false)} × ${fmtNum(height, 9, false)} ]`;
+        } else {
+            boundsEl.innerText = `[ (${fmtCoord(0, 9, true)}, ${fmtCoord(0, 9, true)}) → (${fmtCoord(0, 9, true)}, ${fmtCoord(0, 9, true)}) ]`;
+            expanseEl.innerText = `[ ${fmtNum(0, 9, false)} × ${fmtNum(0, 9, false)} ]`;
+        }
+    }
+    requestAnimationFrame(uiLoop);
+}
+requestAnimationFrame(uiLoop);
 
 function updateInstrumentation() {
     if (!canvas.width || !canvas.height) return;
@@ -129,31 +164,21 @@ resizeCanvas();
 function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
     const gen = BigInt(meta.generation);
 
-    // Drop out-of-order packets based on what we actually rendered, BUT accept Gen 0 (Reset)
-    // Local UI events override this check using forceRender.
-    if (!forceRender && gen <= lastRenderedGen && gen !== 0n) return;
+    // Ensure we don't render stale out-of-order packets.
+    // We allow gen === lastRenderedGen to support panning/zooming updates while the simulation is stopped.
+    if (!forceRender && gen < lastRenderedGen && gen !== 0n) return;
 
     lastState = { meta, dataView, binaryOffset }; // Store for re-rendering pan/zoom
     lastRenderedGen = gen;
-    currentGen = gen; // Keep synched
 
     const recordCount = Number(meta.record_count);
 
     genEl.innerText = gen.toString();
 
-    // Performance Telemetry (Atomic sync with cached announcement)
-    const telemetry = pendingTelemetry.get(meta.generation);
+    // Performance Telemetry (Embedded securely in the BinaryStateHeader payload)
+    const telemetry = meta.telemetry;
     if (telemetry) {
         updateTelemetry(telemetry);
-        pendingTelemetry.delete(meta.generation);
-
-        // Cleanup old entries (robustness)
-        if (pendingTelemetry.size > 100) {
-            const keys = Array.from(pendingTelemetry.keys()).sort((a, b) => a - b);
-            for (let i = 0; i < keys.length - 50; i++) {
-                pendingTelemetry.delete(keys[i]);
-            }
-        }
     }
 
     // Render Canvas
@@ -190,49 +215,7 @@ function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
 
 function updateTelemetry(meta) {
     if (!meta) return;
-
-    if (meta.is_running !== undefined) {
-        isRunning = meta.is_running;
-        updateButtonStates();
-    }
-
-    // Total Cells / Population
-    const total = meta.population !== undefined ? BigInt(meta.population) : 0n;
-    countEl.innerText = total.toLocaleString();
-
-    // Work Rate
-    const workRate = meta.work_rate || 0;
-    workEl.innerText = formatSI(workRate, 3, false);
-
-    // Net Rate
-    const netRate = meta.net_rate || 0;
-    netEl.innerText = formatSI(netRate, 3, true);
-
-    // GPS
-    const gps = meta.gps || 0;
-    gpsEl.innerText = formatSI(gps, 3, false);
-    // Use toFixed(2) for consistency (or formatSI/Engineering if desired, but user asked for Engineering later?)
-    // User asked "We should also be prepared to display GPS as a floating point value... use engineering notation".
-    // formatSI supports engineering notation? 
-    // Let's use formatSI(gps, 3, false) like others for now, or just fixed if simple.
-    // User: "As breeder 1 grows the GPS will steadily fall... We should use engineering notation to display this value in all UIs."
-    // formatSI(num, width, sign)
-    gpsEl.innerText = formatSI(gps, 3, false);
-
-    // Bounds and Expanse
-    const bounds = meta.bounds;
-    if (bounds) {
-        const [[minX, minY], [maxX, maxY]] = bounds;
-        // Bounds already in Cartesian coordinates from server
-        boundsEl.innerText = `[ (${fmtCoord(minX, 9, true)}, ${fmtCoord(minY, 9, true)}) → (${fmtCoord(maxX, 9, true)}, ${fmtCoord(maxY, 9, true)}) ]`;
-
-        const width = Math.abs(maxX - minX) + 1;
-        const height = Math.abs(maxY - minY) + 1;
-        expanseEl.innerText = `[ ${fmtNum(width, 9, false)} × ${fmtNum(height, 9, false)} ]`;
-    } else {
-        boundsEl.innerText = `[ (${fmtCoord(0, 9, true)}, ${fmtCoord(0, 9, true)}) → (${fmtCoord(0, 9, true)}, ${fmtCoord(0, 9, true)}) ]`;
-        expanseEl.innerText = `[ ${fmtNum(0, 9, false)} × ${fmtNum(0, 9, false)} ]`;
-    }
+    latestTelemetry = meta;
 }
 
 function sendRequest(type, payload = null) {
@@ -258,8 +241,9 @@ function requestState() {
     }
 
     pendingRequest = true;
+    pendingRequestEpoch = expectedEpoch;
 
-    // Calculate visible bounds
+    // Send JSON Request
     const cx = canvas.width / 2 + offsetX;
     const cy = canvas.height / 2 + offsetY;
 
@@ -356,17 +340,24 @@ function connect() {
         if (header.type === "SnapshotAvailable") {
             const { telemetry } = header.payload;
             const generation = telemetry.generation;
+
+            // Immediately update UI telemetry so controls (Stop/Start/Step) are responsive 
+            // even if a frame isn't actively requested/rendered.
+            if (telemetry.is_running !== undefined && isRunning !== telemetry.is_running) {
+                isRunning = telemetry.is_running;
+                updateButtonStates();
+            }
+            updateTelemetry(telemetry);
+
             const gen = BigInt(generation);
-            if (gen === 0n && currentGen !== 0n) {
+            // Any drop in generation represents a simulation reset or seed!
+            // No jitter heuristics needed since protocol is strictly ordered without Auto-Upgrades.
+            if (gen < currentGen) {
                 lastRenderedGen = -1n;
+                expectedEpoch++;
                 updateInstrumentation();
             }
             currentGen = gen;
-
-            // (DOM updates removed from here to prevent JS thread starvation)
-
-            // Cache telemetry for atomic update with binary cells
-            pendingTelemetry.set(generation, telemetry);
 
             // Fetch state immediately to avoid trailing-edge debounce starvation
             requestState();
@@ -387,23 +378,33 @@ function connect() {
             }
 
         } else if (header.type === "Ok") {
-            // Silent No-Op (e.g. from GetState on a missing snapshot)
+            // Missing snapshot 
             pendingRequest = false;
             nextRequestPending = false;
         } else if (header.type === "BinaryStateHeader") {
+            if (expectedEpoch !== pendingRequestEpoch) {
+                // This payload was requested *before* a reset occurred. It is a Ghost from the past!
+                pendingRequest = false;
+                if (nextRequestPending) {
+                    nextRequestPending = false;
+                    requestState();
+                }
+                return;
+            }
+
             pendingRequest = false;
 
             // Binary Payload starts after JSON
             // 4 + jsonLen
             const binaryOffset = 4 + jsonLen;
-            const meta = header.payload; // { generation, population, is_running, record_count }
+            const meta = header.payload; // { generation, population, ... }
 
             renderCellsHybrid(meta, view, binaryOffset);
 
             // If a new snapshot became available while we were waiting, fetch it now
             if (nextRequestPending) {
                 nextRequestPending = false;
-                requestState();
+                requestState(); // Fast network fetch overlaps browser paint, no RAF delay!
             }
         } else if (header.type === "Error") {
             pendingRequest = false;
@@ -422,16 +423,28 @@ function connect() {
 
 playPauseBtn.onclick = () => {
     if (isRunning) {
+        isRunning = false; // Eager UI Update
+        updateButtonStates();
         sendRequest("Stop");
     } else {
+        isRunning = true; // Eager UI Update
+        updateButtonStates();
         sendRequest("Start");
     }
 };
-stepBtn.onclick = () => sendRequest("NextStep");
-resetBtn.onclick = () => sendRequest("Reset");
+stepBtn.onclick = () => {
+    sendRequest("NextStep");
+};
+resetBtn.onclick = () => {
+    expectedEpoch++;
+    currentGen = 0n;
+    lastRenderedGen = -1n;
+    sendRequest("Reset");
+};
 originBtn.onclick = () => {
     offsetX = 0;
     offsetY = 0;
+    expectedEpoch++;
     if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     updateInstrumentation();
     requestStateDebounced();
@@ -444,6 +457,9 @@ patternSelect.onchange = (e) => {
     const target = /** @type {HTMLSelectElement} */ (e.target);
     const pattern = target.value;
     if (pattern) {
+        expectedEpoch++;
+        currentGen = 0n;
+        lastRenderedGen = -1n;
         sendRequest("Seed", pattern);
         target.value = "";
     }
@@ -453,6 +469,9 @@ function updateZoom(delta, mouseX = null, mouseY = null) {
     const oldScale = scale;
     scale = Math.max(1, Math.min(16, scale + delta));
     if (scale === oldScale) return;
+
+    // Reset expectedEpoch to stop any pending ghost layout requests that match the old scale
+    expectedEpoch++;
 
     if (mouseX !== null && mouseY !== null) {
         // Adjust offset to keep the point under the mouse stable
