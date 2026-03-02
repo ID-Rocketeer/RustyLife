@@ -87,12 +87,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
         <button onclick="stopMockServer()">Stop Mock Server</button>
         <br>
         <button onclick="sendWelcome()">Send Welcome</button>
-        <button onclick="sendSnapshotAvailable(1, 5)">Send SnapshotAvailable (gen=1, pop=5)</button>
-        <button onclick="sendBinaryState(1, 5)">Send BinaryState (gen=1, 5 cells)</button>
+        <button onclick="sendBinaryState(1, 5)">Send BinaryStateHeader (gen=1, 5 cells)</button>
         <button onclick="sendError('Test error message')">Send Error</button>
         <br>
         <button onclick="simulatePatternLoad()">Simulate: Pattern Load</button>
         <button onclick="simulateRunning()">Simulate: Running Engine</button>
+        <button onclick="simulateStop()">Simulate: Stop Engine</button>
     </div>
 
     <div id="log"></div>
@@ -100,7 +100,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     <script type="module">
         import { encodeRequest } from './protocol.js';
 
-        let mockWs = null;
+        window.mockWs = null;
         let mockServer = null;
 
         window.log = function (message, type = 'info') {
@@ -115,90 +115,101 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
         window.startMockServer = async function () {
             log('Starting mock WebSocket server on port 8081...', 'send');
 
-            // For testing, we'll use a simple approach:
-            // Open the actual dashboard.html in an iframe and inject a mock WebSocket
-            const iframe = document.createElement('iframe');
-            iframe.src = './index.html';
-            iframe.style.width = '800px';
-            iframe.style.height = '600px';
-            iframe.style.border = '2px solid #00ff00';
-            document.body.appendChild(iframe);
+            // Use fetch to grab index.html so we can inject MockWebSocket BEFORE its scripts run
+            fetch('./index.html').then(r => r.text()).then(indexHtml => {
+                const iframe = document.createElement('iframe');
+                iframe.style.width = '1000px';
+                iframe.style.height = '800px';
+                iframe.style.border = '2px solid #00ff00';
+                
+                // Add base href so relative paths like dashboard.js work
+                let injectedHtml = indexHtml.replace('<head>', '<head>\n<base href="' + window.location.href + '">');
+                
+                // Define the mock WebSocket class
+                const mockScript = `
+                <script>
+                    window.MockWebSocketClass = class MockWebSocket extends EventTarget {
+                        constructor(url) {
+                            super();
+                            window.parent.log(\`Mock WebSocket connecting to: \${url}\`, 'recv');
+                            this.url = url;
+                            this.readyState = 0; // CONNECTING
+                            this.binaryType = 'arraybuffer';
+                            
+                            setTimeout(() => {
+                                this.readyState = 1; // OPEN
+                                if (this.onopen) this.onopen({ type: 'open' });
+                                window.parent.log('Mock WebSocket connected', 'recv');
+                            }, 100);
 
-            iframe.onload = () => {
-                log('Dashboard loaded, injecting mock WebSocket...', 'recv');
-
-                // Inject mock WebSocket into iframe
-                const iframeWindow = iframe.contentWindow;
-                const originalWebSocket = iframeWindow.WebSocket;
-
-                iframeWindow.WebSocket = class MockWebSocket extends EventTarget {
-                    constructor(url) {
-                        super();
-                        log(`Mock WebSocket connecting to: ${url}`, 'recv');
-                        this.url = url;
-                        this.readyState = 0; // CONNECTING
-                        this.binaryType = 'arraybuffer';
-
-                        // Simulate connection
-                        setTimeout(() => {
-                            this.readyState = 1; // OPEN
-                            if (this.onopen) this.onopen({ type: 'open' });
-                            log('Mock WebSocket connected', 'recv');
-                        }, 100);
-
-                        mockWs = this;
-                    }
-
-                    send(data) {
-                        log(`GUI sent: ${data.byteLength} bytes`, 'send');
-                        // Decode and log the request
-                        try {
-                            const buffer = data.buffer ? data.buffer : data;
-                            const view = new DataView(buffer);
-                            const jsonLen = view.getUint32(0, true);
-                            const jsonBytes = new Uint8Array(buffer, 4, jsonLen);
-                            const jsonStr = new TextDecoder().decode(jsonBytes);
-                            const request = JSON.parse(jsonStr);
-                            log(`  Request: ${JSON.stringify(request)}`, 'send');
-
-                            if (request.type === "GetState") {
-                                // Simulate server packing and sending binary state
-                                setTimeout(() => {
-                                    window.sendBinaryState(request.payload.generation, 10);
-                                }, 1);
-                            }
-                        } catch (e) {
-                            log(`  Failed to parse request: ${e}`, 'error');
+                            window.parent.mockWs = this;
                         }
-                    }
 
-                    close() {
-                        this.readyState = 3; // CLOSED
-                        if (this.onclose) this.onclose({ type: 'close' });
-                        log('Mock WebSocket closed', 'recv');
-                    }
-                };
+                        send(data) {
+                            window.parent.log(\`GUI sent: \${data.byteLength || data.length} bytes\`, 'send');
+                            try {
+                                const buffer = data.buffer ? data.buffer : data;
+                                const view = new DataView(buffer);
+                                const jsonLen = view.getUint32(0, true);
+                                const jsonBytes = new Uint8Array(buffer, 4, jsonLen);
+                                const jsonStr = new TextDecoder().decode(jsonBytes);
+                                const request = JSON.parse(jsonStr);
+                                window.parent.log(\`  Request: \${JSON.stringify(request)}\`, 'send');
 
-                // Add static readyState constants to match native WebSocket
-                iframeWindow.WebSocket.CONNECTING = 0;
-                iframeWindow.WebSocket.OPEN = 1;
-                iframeWindow.WebSocket.CLOSING = 2;
-                iframeWindow.WebSocket.CLOSED = 3;
+                                if (request.type === "HandshakeFullSnapshot") {
+                                    setTimeout(() => {
+                                        window.parent.sendBinaryState(window.parent.simGen || 0, 10);
+                                    }, 1);
+                                } else if (request.type === "AckPreviousFrame") {
+                                    if (window.parent.simIsRunning) {
+                                        setTimeout(() => {
+                                            window.parent.simGen = (window.parent.simGen || 0) + 1;
+                                            window.parent.sendBinaryState(window.parent.simGen, 10);
+                                        }, 16);
+                                    }
+                                } else if (request.type === "UpdateViewport") {
+                                    setTimeout(() => {
+                                        window.parent.sendBinaryState(window.parent.simGen || 0, 10);
+                                    }, 1);
+                                }
+                            } catch (e) {
+                                window.parent.log(\`  Failed to parse request: \${e}\`, 'error');
+                            }
+                        }
 
-                log('Mock WebSocket injected successfully', 'recv');
-            };
+                        close() {
+                            this.readyState = 3; // CLOSED
+                            if (this.onclose) this.onclose({ type: 'close' });
+                            window.parent.log('Mock WebSocket closed', 'recv');
+                        }
+                    };
+                    window.MockWebSocketClass.CONNECTING = 0;
+                    window.MockWebSocketClass.OPEN = 1;
+                    window.MockWebSocketClass.CLOSING = 2;
+                    window.MockWebSocketClass.CLOSED = 3;
+                    window.WebSocket = window.MockWebSocketClass;
+                    window.parent.log('Mock WebSocket injected successfully', 'recv');
+                <\/script>`;
+                
+                // Inject the mock script right before </body> or inside <head>
+                injectedHtml = injectedHtml.replace('<head>', '<head>' + mockScript);
+                
+                iframe.srcdoc = injectedHtml;
+                document.body.appendChild(iframe);
+            });
         };
 
+        
         window.stopMockServer = function () {
-            if (mockWs) {
-                mockWs.close();
-                mockWs = null;
+            if (window.mockWs) {
+                window.mockWs.close();
+                window.mockWs = null;
             }
             log('Mock server stopped', 'send');
         };
 
         window.sendWelcome = function () {
-            if (!mockWs) {
+            if (!window.mockWs) {
                 log('Mock server not started!', 'error');
                 return;
             }
@@ -223,14 +234,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             view.setUint32(0, len, true);
             new Uint8Array(buf, 4).set(jsonBytes);
 
-            if (mockWs.onmessage) {
-                mockWs.onmessage({ data: buf });
+            if (window.mockWs.onmessage) {
+                window.mockWs.onmessage({ data: buf });
                 log(`Sent Welcome (${len} bytes)`, 'recv');
             }
         };
 
         window.sendSnapshotAvailable = function (generation, population) {
-            if (!mockWs) {
+            if (!window.mockWs) {
                 log('Mock server not started!', 'error');
                 return;
             }
@@ -259,14 +270,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             view.setUint32(0, len, true);
             new Uint8Array(buf, 4).set(jsonBytes);
 
-            if (mockWs.onmessage) {
-                mockWs.onmessage({ data: buf });
+            if (window.mockWs.onmessage) {
+                window.mockWs.onmessage({ data: buf });
                 log(`Sent SnapshotAvailable gen=${generation} pop=${population}`, 'recv');
             }
         };
 
         window.sendBinaryState = function (generation, cellCount) {
-            if (!mockWs) {
+            if (!window.mockWs) {
                 log('Mock server not started!', 'error');
                 return;
             }
@@ -274,7 +285,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             const header = {
                 type: 'BinaryStateHeader',
                 payload: {
-                    generation: generation,
+                    telemetry: {
+                        generation: generation,
+                        population: cellCount,
+                        is_running: window.simIsRunning || false,
+                        gps: window.simIsRunning ? 1000.0 : 0.0,
+                        work_rate: window.simIsRunning ? 50.0 : 0.0,
+                        net_rate: 10.0,
+                        bounds: [[0, 0], [10, 10]]
+                    },
                     record_count: cellCount
                 }
             };
@@ -283,48 +302,35 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             const jsonBytes = new TextEncoder().encode(json);
             const jsonLen = jsonBytes.length;
 
-            // Create binary cells (x, y, state) - each 33 bytes
             const binarySize = cellCount * 33;
-            const totalSize = 4 + jsonLen + binarySize + 4; // +4 for CRC
+            const totalSize = 4 + jsonLen + binarySize;
 
             const buf = new ArrayBuffer(totalSize);
             const view = new DataView(buf);
 
-            // Length prefix
             view.setUint32(0, jsonLen, true);
-
-            // JSON header
             new Uint8Array(buf, 4).set(jsonBytes);
 
-            // Binary cells (simple pattern: horizontal line)
             let offset = 4 + jsonLen;
             for (let i = 0; i < cellCount; i++) {
-                // x coordinate (i128 = 16 bytes)
                 view.setBigInt64(offset, BigInt(i), true);
                 view.setBigInt64(offset + 8, 0n, true);
                 offset += 16;
-
-                // y coordinate (i128 = 16 bytes)
                 view.setBigInt64(offset, 0n, true);
                 view.setBigInt64(offset + 8, 0n, true);
                 offset += 16;
-
-                // state (u8 = 1 byte)
-                view.setUint8(offset, 1); // Alive
+                view.setUint8(offset, 1);
                 offset += 1;
             }
 
-            // CRC (fake it for now)
-            view.setUint32(offset, 0x12345678, true);
-
-            if (mockWs.onmessage) {
-                mockWs.onmessage({ data: buf });
-                log(`Sent BinaryState gen=${generation} cells=${cellCount}`, 'recv');
+            if (window.mockWs.onmessage) {
+                window.mockWs.onmessage({ data: buf });
+                log(`Sent BinaryStateHeader gen=${generation} cells=${cellCount}`, 'recv');
             }
         };
 
         window.sendError = function (message) {
-            if (!mockWs) {
+            if (!window.mockWs) {
                 log('Mock server not started!', 'error');
                 return;
             }
@@ -343,32 +349,46 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             view.setUint32(0, len, true);
             new Uint8Array(buf, 4).set(jsonBytes);
 
-            if (mockWs.onmessage) {
-                mockWs.onmessage({ data: buf });
+            if (window.mockWs.onmessage) {
+                window.mockWs.onmessage({ data: buf });
                 log(`Sent Error: ${message}`, 'recv');
             }
         };
 
         window.simulatePatternLoad = function () {
             log('=== Simulating Pattern Load ===', 'send');
+            window.simIsRunning = false;
+            window.simGen = 0;
             sendWelcome();
-            setTimeout(() => sendSnapshotAvailable(0, 5), 500);
-            setTimeout(() => sendBinaryState(0, 5), 1000);
         };
 
         window.simulateRunning = function () {
             log('=== Simulating Running Engine ===', 'send');
-            let gen = 1;
-            const interval = setInterval(() => {
-                if (gen > 100) {
-                    clearInterval(interval);
-                    log('Simulation complete', 'send');
-                    return;
-                }
-                sendSnapshotAvailable(gen, 5 + gen);
-                gen++;
-            }, 5);
+            window.simIsRunning = true;
+            setTimeout(() => {
+                window.simGen = (window.simGen || 0) + 1;
+                window.sendBinaryState(window.simGen, 10);
+            }, 10);
         };
+        
+        window.simulateStop = function () {
+            log('=== Simulating Stop Engine ===', 'send');
+            window.simIsRunning = false;
+            window.sendBinaryState(window.simGen || 0, 10);
+        };
+
+        // Auto-start for user convenience
+        window.addEventListener('load', () => {
+            if (window.startMockServer) {
+                window.startMockServer();
+            }
+            // Add a small delay for the iframe to mount before slamming the socket
+            setTimeout(() => {
+                if (window.simulatePatternLoad) {
+                    window.simulatePatternLoad();
+                }
+            }, 500);
+        });
     </script>
 </body>
 
