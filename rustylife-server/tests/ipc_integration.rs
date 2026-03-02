@@ -28,180 +28,7 @@ impl Drop for ServerGuard {
     }
 }
 
-#[tokio::test]
-async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
-    // Start the server in the background
-    // We use a different port for testing to avoid collisions
-    let server = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rustylife-server",
-            "--",
-            "--port",
-            "8081",
-            "--ipc-port",
-            "9002",
-        ])
-        .spawn()?;
-
-    let _guard = ServerGuard(server);
-
-    // Wait for server to start with a timeout
-    timeout(Duration::from_secs(30), async {
-        loop {
-            if TcpStream::connect("127.0.0.1:9002").await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("Server failed to start within 30 seconds"))?;
-
-    // Connect to IPC port
-    println!("Connecting to IPC port...");
-    let stream = timeout(Duration::from_secs(5), TcpStream::connect("127.0.0.1:9002")).await??;
-    let (mut reader, mut writer) = stream.into_split();
-
-    // Wait for push updates (server sends Welcome + initial SnapshotAvailable first)
-    println!("Waiting for updates...");
-    let mut buffer = Vec::new(); // Start empty - read_buf will append
-    let mut offset = 0;
-
-    // Helper to read a response
-    async fn read_response(
-        reader: &mut tokio::net::tcp::OwnedReadHalf,
-        buffer: &mut Vec<u8>,
-        offset: &mut usize,
-    ) -> anyhow::Result<rustylife_core::Response> {
-        loop {
-            if *offset >= 4 {
-                let len = u32::from_le_bytes(buffer[0..4].try_into().unwrap()) as usize;
-                if *offset >= 4 + len {
-                    let (resp, consumed) =
-                        rustylife_core::Response::from_bytes(&buffer[0..*offset])
-                            .map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
-                    buffer.drain(0..consumed);
-                    *offset -= consumed;
-                    return Ok(resp);
-                }
-            }
-            let n = reader.read_buf(buffer).await?;
-            if n == 0 {
-                return Err(anyhow::anyhow!("EOF"));
-            }
-            *offset += n;
-        }
-    }
-
-    let mut found_gen_0 = false;
-    let mut found_next_gen = false;
-
-    for _ in 0..10 {
-        // Try a few messages
-        let resp = timeout(
-            Duration::from_secs(5),
-            read_response(&mut reader, &mut buffer, &mut offset),
-        )
-        .await??;
-        match resp {
-            rustylife_core::Response::SnapshotAvailable { telemetry } => {
-                println!(
-                    "Received SnapshotAvailable for generation: {}",
-                    telemetry.generation
-                );
-                if telemetry.generation == 0 {
-                    found_gen_0 = true;
-                    // Trigger first step
-                    writer
-                        .write_all(&rustylife_core::Request::NextStep.to_bytes())
-                        .await?;
-                } else if telemetry.generation > 0 {
-                    found_next_gen = true;
-                    break;
-                }
-            }
-            _ => println!("Received other response: {:?}", resp),
-        }
-    }
-
-    assert!(found_gen_0, "Should have received initial Gen 0");
-    assert!(found_next_gen, "Should have advanced generation");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_missing_snapshot_returns_ok() -> anyhow::Result<()> {
-    // Start the server
-    let server = Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "rustylife-server",
-            "--",
-            "--port",
-            "8082",
-            "--ipc-port",
-            "9003",
-        ])
-        .spawn()?;
-
-    let _guard = ServerGuard(server);
-
-    // Wait for server
-    timeout(Duration::from_secs(30), async {
-        loop {
-            if TcpStream::connect("127.0.0.1:9003").await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("Server failed to start"))?;
-
-    let stream = TcpStream::connect("127.0.0.1:9003").await?;
-    let (mut reader, mut writer) = stream.into_split();
-    let mut buffer = Vec::new();
-    let mut offset = 0;
-
-    // 1. Drain initial Welcome + SnapshotAvailable
-    for _ in 0..2 {
-        let _ = timeout(
-            Duration::from_secs(5),
-            read_response_headless(&mut reader, &mut buffer, &mut offset),
-        )
-        .await??;
-    }
-
-    // 2. Request a generation that definitely doesn't exist (999,999)
-    println!("Requesting non-existent generation 999999...");
-    let req = rustylife_core::Request::GetState {
-        generation: 999_999,
-        viewport: None,
-    };
-    writer.write_all(&req.to_bytes()).await?;
-
-    // 3. Verify server returns Response::Ok instead of Response::Error
-    let resp = timeout(
-        Duration::from_secs(5),
-        read_response_headless(&mut reader, &mut buffer, &mut offset),
-    )
-    .await??;
-
-    assert_eq!(
-        resp,
-        rustylife_core::Response::Ok,
-        "Server should return Ok (not Error) for missing snapshots"
-    );
-
-    Ok(())
-}
-
-// Minimal helper for the new test case
-async fn read_response_headless(
+async fn read_response(
     reader: &mut tokio::net::tcp::OwnedReadHalf,
     buffer: &mut Vec<u8>,
     offset: &mut usize,
@@ -223,4 +50,294 @@ async fn read_response_headless(
         }
         *offset += n;
     }
+}
+
+#[tokio::test]
+async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
+    let server = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rustylife-server",
+            "--",
+            "--port",
+            "8081",
+            "--ipc-port",
+            "9002",
+        ])
+        .spawn()?;
+    let _guard = ServerGuard(server);
+
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if TcpStream::connect("127.0.0.1:9002").await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("Server failed to start"))?;
+
+    let stream = timeout(Duration::from_secs(5), TcpStream::connect("127.0.0.1:9002")).await??;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buffer = Vec::new();
+    let mut offset = 0;
+
+    let resp = timeout(
+        Duration::from_secs(5),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    match resp {
+        rustylife_core::Response::Welcome { .. } => {
+            let req = rustylife_core::Request::HandshakeFullSnapshot { viewport: None };
+            writer.write_all(&req.to_bytes()).await?;
+        }
+        _ => panic!("Expected Welcome response"),
+    }
+
+    let mut found_gen_0 = false;
+    let mut found_next_gen = false;
+
+    for _ in 0..10 {
+        let resp = timeout(
+            Duration::from_secs(5),
+            read_response(&mut reader, &mut buffer, &mut offset),
+        )
+        .await??;
+        match resp {
+            rustylife_core::Response::BinaryStateHeader {
+                record_count,
+                telemetry,
+                ..
+            } => {
+                let payload_size = (record_count as usize * 33) + 4;
+                while offset < payload_size {
+                    let n = reader.read_buf(&mut buffer).await?;
+                    if n == 0 {
+                        return Err(anyhow::anyhow!("EOF during binary read"));
+                    }
+                    offset += n;
+                }
+                buffer.drain(0..payload_size);
+                offset -= payload_size;
+
+                if telemetry.generation == 0 {
+                    found_gen_0 = true;
+                    writer
+                        .write_all(&rustylife_core::Request::NextStep.to_bytes())
+                        .await?;
+                } else if telemetry.generation > 0 {
+                    found_next_gen = true;
+                    break;
+                }
+                writer
+                    .write_all(&rustylife_core::Request::AckPreviousFrame.to_bytes())
+                    .await?;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(found_gen_0, "Should have received initial Gen 0");
+    assert!(found_next_gen, "Should have advanced generation");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_ack_flow_control() -> anyhow::Result<()> {
+    let server = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rustylife-server",
+            "--",
+            "--port",
+            "8082",
+            "--ipc-port",
+            "9003",
+        ])
+        .spawn()?;
+    let _guard = ServerGuard(server);
+
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if TcpStream::connect("127.0.0.1:9003").await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("Server failed to start"))?;
+
+    let stream = TcpStream::connect("127.0.0.1:9003").await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buffer = Vec::new();
+    let mut offset = 0;
+
+    let _ = timeout(
+        Duration::from_secs(5),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    writer
+        .write_all(&rustylife_core::Request::HandshakeFullSnapshot { viewport: None }.to_bytes())
+        .await?;
+
+    let resp = timeout(
+        Duration::from_secs(5),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    let (gen_num, count) = match resp {
+        rustylife_core::Response::BinaryStateHeader {
+            telemetry,
+            record_count,
+            ..
+        } => (telemetry.generation, record_count as usize),
+        _ => panic!("Expected BinaryStateHeader"),
+    };
+    assert_eq!(gen_num, 0);
+
+    let payload_size = (count * 33) + 4;
+    while offset < payload_size {
+        let n = reader.read_buf(&mut buffer).await?;
+        if n == 0 {
+            return Err(anyhow::anyhow!("EOF"));
+        }
+        offset += n;
+    }
+    buffer.drain(0..payload_size);
+    offset -= payload_size;
+
+    writer
+        .write_all(&rustylife_core::Request::NextStep.to_bytes())
+        .await?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let timeout_res = timeout(
+        Duration::from_millis(500),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await;
+    assert!(
+        timeout_res.is_err(),
+        "Server should not send frames without ACK!"
+    );
+
+    writer
+        .write_all(&rustylife_core::Request::AckPreviousFrame.to_bytes())
+        .await?;
+    // We dropped the previous frame by not being ready. Ask the engine to step again
+    // so we can receive the new frame now that we are ready.
+    writer
+        .write_all(&rustylife_core::Request::NextStep.to_bytes())
+        .await?;
+
+    let resp2 = timeout(
+        Duration::from_secs(5),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    match resp2 {
+        rustylife_core::Response::BinaryStateHeader { telemetry, .. } => {
+            assert!(telemetry.generation > 0)
+        }
+        _ => panic!("Expected Data"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_viewport_pushes_state_immediately() -> anyhow::Result<()> {
+    let server = Command::new("cargo")
+        .args([
+            "run",
+            "-p",
+            "rustylife-server",
+            "--",
+            "--port",
+            "8083",
+            "--ipc-port",
+            "9004",
+        ])
+        .spawn()?;
+    let _guard = ServerGuard(server);
+
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if TcpStream::connect("127.0.0.1:9004").await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("Server failed to start"))?;
+
+    let stream = TcpStream::connect("127.0.0.1:9004").await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buffer = Vec::new();
+    let mut offset = 0;
+
+    let _ = timeout(
+        Duration::from_secs(5),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    writer
+        .write_all(&rustylife_core::Request::HandshakeFullSnapshot { viewport: None }.to_bytes())
+        .await?;
+
+    let resp = timeout(
+        Duration::from_secs(5),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    let (gen_num, count) = match resp {
+        rustylife_core::Response::BinaryStateHeader {
+            telemetry,
+            record_count,
+            ..
+        } => (telemetry.generation, record_count as usize),
+        _ => panic!("Expected BinaryStateHeader"),
+    };
+    assert_eq!(gen_num, 0);
+
+    let payload_size = (count * 33) + 4;
+    while offset < payload_size {
+        let n = reader.read_buf(&mut buffer).await?;
+        if n == 0 {
+            return Err(anyhow::anyhow!("EOF"));
+        }
+        offset += n;
+    }
+    buffer.drain(0..payload_size);
+    offset -= payload_size;
+
+    // Send UpdateViewport
+    writer
+        .write_all(
+            &rustylife_core::Request::UpdateViewport {
+                viewport: ((-10, -10), (10, 10)),
+            }
+            .to_bytes(),
+        )
+        .await?;
+
+    // We should receive a response IMMEDIATELY
+    let resp2 = timeout(
+        Duration::from_secs(1),
+        read_response(&mut reader, &mut buffer, &mut offset),
+    )
+    .await??;
+    match resp2 {
+        rustylife_core::Response::BinaryStateHeader { telemetry, .. } => {
+            assert_eq!(telemetry.generation, 0)
+        }
+        _ => panic!("Expected Data"),
+    }
+    Ok(())
 }

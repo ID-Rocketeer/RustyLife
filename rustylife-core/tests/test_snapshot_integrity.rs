@@ -28,32 +28,18 @@ struct IntegritySubscriber {
 impl EngineSubscriber for IntegritySubscriber {
     fn on_snapshot_available(
         &self,
-        data: Arc<Vec<u8>>,
+        data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        match rustylife_core::decode_binary_packet(&data) {
-            Ok(packet) => {
-                let reported_count = packet.record_count;
-                // Verify that the record_count in the header matches the actual number of cells in the payload.
-                let actual_count = packet.cells().count() as u64;
-
-                if reported_count != actual_count {
-                    eprintln!(
-                        "\n!!! INTEGRITY FAILURE at Gen {}: Header says {} records, Payload has {} !!!\n",
-                        telemetry.generation, reported_count, actual_count
-                    );
-                    self.failure_detected.store(true, Ordering::SeqCst);
-                    return false; // Stop receiving updates
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "\n!!! DECODE FAILURE at Gen {}: {} !!!\n",
-                    telemetry.generation, e
-                );
-                self.failure_detected.store(true, Ordering::SeqCst);
-                return false;
-            }
+        let packet_data =
+            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry.clone());
+        if let Err(e) = rustylife_core::decode_binary_packet(&packet_data) {
+            eprintln!(
+                "\n!!! DECODE FAILURE at Gen {}: {} !!!\n",
+                telemetry.generation, e
+            );
+            self.failure_detected.store(true, Ordering::SeqCst);
+            return false;
         }
         true
     }

@@ -49,7 +49,7 @@ impl TestSync {
 impl EngineSubscriber for TestSync {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let mut guard = self.state.lock().unwrap();

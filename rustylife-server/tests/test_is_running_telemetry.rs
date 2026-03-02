@@ -48,10 +48,12 @@ pub struct PresenterSubscriber {
 impl EngineSubscriber for PresenterSubscriber {
     fn on_snapshot_available(
         &self,
-        data: Arc<Vec<u8>>,
+        data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
+        let packet_data =
+            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry.clone());
+        if let Ok(packet) = rustylife_core::decode_binary_packet(&packet_data) {
             let mut presenter = self.presenter.lock().unwrap();
             presenter.update_state(packet, telemetry);
         }

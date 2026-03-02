@@ -16,6 +16,17 @@
 use rustylife_core::{engine::SimulationEngine, space::SimulationSpace};
 use std::sync::Arc;
 use std::time::Duration;
+struct GpsTracker(std::sync::Mutex<Option<rustylife_core::Telemetry>>);
+impl rustylife_core::engine::EngineSubscriber for GpsTracker {
+    fn on_snapshot_available(
+        &self,
+        _data: Arc<Vec<((i128, i128), u8)>>,
+        telemetry: rustylife_core::Telemetry,
+    ) -> bool {
+        *self.0.lock().unwrap() = Some(telemetry);
+        true
+    }
+}
 
 #[test]
 fn test_gps_data_integrity() {
@@ -23,48 +34,35 @@ fn test_gps_data_integrity() {
     // Use smaller pool for test
     let engine = SimulationEngine::new(space, 2);
 
+    let tracker = Arc::new(GpsTracker(std::sync::Mutex::new(None)));
+    engine.add_subscriber(tracker.clone() as Arc<dyn rustylife_core::engine::EngineSubscriber>);
+
     // 1. Start Engine
     engine.start();
 
     // 2. Wait for a few generations to ensure >0 GPS
-    // We need enough work to happen.
     std::thread::sleep(Duration::from_millis(500));
-
-    // 3. Get Snapshot
-    let snapshot_store = &engine.snapshots;
-    let latest = snapshot_store.get_latest();
-
-    match latest {
-        Some((_gen, data)) => {
-            // 4. Decode Header manually to check JSON
-            let len_bytes: [u8; 4] = data[0..4].try_into().unwrap();
-            let json_len = u32::from_le_bytes(len_bytes) as usize;
-            let json_slice = &data[4..4 + json_len];
-            let json_str = std::str::from_utf8(json_slice).unwrap();
-
-            println!("JSON Header: {}", json_str);
-
-            // 5. Verify "gps" field DOES exist in BinaryStateHeader
-            assert!(
-                json_str.contains("\"gps\":"),
-                "JSON MUST contain gps field in BinaryStateHeader after telemetry embedding"
-            );
-
-            // Deserialize to check variant
-            let response: rustylife_core::Response = serde_json::from_str(json_str).unwrap();
-            if let rustylife_core::Response::BinaryStateHeader { .. } = response {
-                println!("Confirmed: BinaryStateHeader retains GPS telemetry");
-            } else {
-                panic!("Wrong response type");
-            }
-        }
-        None => {
-            // If no snapshot yet, it might be too fast or failing to start.
-            // But we slept 500ms.
-            // Force a manual check if engine is running?
-            // engine.start() is async.
-        }
-    }
-
     engine.stop();
+
+    let telemetry = tracker
+        .0
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("Should have received telemetry");
+
+    // Convert to binary packet to test serialization
+    let payload = rustylife_core::encode_binary_packet(telemetry.generation, &[], telemetry);
+
+    let len_bytes: [u8; 4] = payload[0..4].try_into().unwrap();
+    let json_len = u32::from_le_bytes(len_bytes) as usize;
+    let json_slice = &payload[4..4 + json_len];
+    let json_str = std::str::from_utf8(json_slice).unwrap();
+
+    println!("JSON Header: {}", json_str);
+
+    assert!(
+        json_str.contains("\"gps\":"),
+        "JSON MUST contain gps field in BinaryStateHeader after telemetry embedding"
+    );
 }

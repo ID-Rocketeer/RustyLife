@@ -3,4 +3,4 @@
 /**
  * Represents a request from a client to the simulation server.
  */
-export type Request = { "type": "NextStep" } | { "type": "Reset" } | { "type": "GetState", "payload": { generation: bigint, viewport: [[bigint, bigint], [bigint, bigint]] | null, } } | { "type": "Start" } | { "type": "Stop" } | { "type": "Seed", "payload": string } | { "type": "Shutdown" };
+export type Request = { "type": "NextStep" } | { "type": "Reset" } | { "type": "GetState", "payload": { generation: bigint, viewport: [[bigint, bigint], [bigint, bigint]] | null, } } | { "type": "Start" } | { "type": "Stop" } | { "type": "Seed", "payload": string } | { "type": "Shutdown" } | { "type": "HandshakeMetricsOnly" } | { "type": "HandshakeFullSnapshot", "payload": { viewport: [[bigint, bigint], [bigint, bigint]] | null, } } | { "type": "AckPreviousFrame" } | { "type": "UpdateViewport", "payload": { viewport: [[bigint, bigint], [bigint, bigint]], } };

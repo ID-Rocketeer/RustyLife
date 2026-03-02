@@ -26,7 +26,7 @@ struct MockClient {
 impl EngineSubscriber for MockClient {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         // In real app, client processes snapshot.

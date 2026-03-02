@@ -24,7 +24,7 @@ struct GpsMonitor {
 impl EngineSubscriber for GpsMonitor {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let mut lock = self.last_telemetry.lock().unwrap();

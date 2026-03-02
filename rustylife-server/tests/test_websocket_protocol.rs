@@ -31,13 +31,6 @@ fn encode_request(req: &Request) -> Vec<u8> {
 
 #[tokio::test]
 async fn test_websocket_protocol_handshake() {
-    // 1. Start Server in background
-    // We assume the server binary is built or we can run it.
-    // Actually, running the full server binary is tricky in a unit test due to port conflicts and lifetime.
-    // Instead, we should ideally test the `handle_connection` logic if it were exposed.
-    // But since it's an integration test, let's try to spawn the server process.
-
-    // Find server executable
     let status = std::process::Command::new("cargo")
         .args(["build", "--bin", "rustylife-server"])
         .status()
@@ -50,62 +43,48 @@ async fn test_websocket_protocol_handshake() {
         .spawn()
         .expect("Failed to spawn server");
 
-    // Give it time to start
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let url = Url::parse("ws://127.0.0.1:9099/ws").unwrap();
 
-    // 2. Connect
     let (ws_stream, _) = connect_async(url.as_str())
         .await
         .expect("Failed to connect");
     let (mut write, mut read) = ws_stream.split();
 
-    // 3. Send Start Command (JSON encoded)
-    let start_req = Request::Start;
-    let binary_req = encode_request(&start_req);
+    let mut found_welcome = false;
+    let _timeout = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(msg) = read.next().await {
+            let msg = msg.expect("Error reading message");
+            if let Message::Binary(data) = msg {
+                if let Ok((Response::Welcome { .. }, _)) = Response::from_bytes(&data) {
+                    found_welcome = true;
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(found_welcome, "Expected Welcome response");
+
+    // Send Handshake
+    let handshake_req = Request::HandshakeFullSnapshot { viewport: None };
     write
-        .send(Message::Binary(binary_req.into()))
+        .send(Message::Binary(encode_request(&handshake_req).into()))
         .await
-        .expect("Failed to send Start");
+        .expect("Failed to send Handshake");
 
-    // 4. Listen for Updates
-    // We expect:
-    // - Initially: SnapshotAvailable(0)
-    // - After Start: SnapshotAvailable(>0)
-    // - Then we request state: GetState -> BinaryStateHeader
-
-    let mut received_generations = Vec::new();
-
-    // Consume messages for a bit
     let timeout = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(msg) = read.next().await {
             let msg = msg.expect("Error reading message");
             if let Message::Binary(data) = msg {
-                // Decode output
                 if let Ok((response, _)) = Response::from_bytes(&data) {
                     match response {
-                        Response::SnapshotAvailable { telemetry, .. } => {
-                            // The original request was to add a redundant check here.
-                            // Assuming the intent was to ensure the 'generation' field is correctly extracted.
-                            // The original code used `g` for generation, now it's `generation`.
-                            println!("Received SnapshotAvailable: {}", telemetry.generation);
-                            received_generations.push(telemetry.generation);
-
-                            // If we see progress, we can request data
-                            if telemetry.generation > 0 {
-                                let get_req = Request::GetState {
-                                    generation: telemetry.generation,
-                                    viewport: None,
-                                };
-                                write
-                                    .send(Message::Binary(encode_request(&get_req).into()))
-                                    .await
-                                    .unwrap();
-                            }
-                        }
-                        Response::BinaryStateHeader { generation, .. } => {
-                            println!("Received BinaryStateHeader for Gen {}", generation);
+                        Response::BinaryStateHeader { telemetry, .. } => {
+                            println!(
+                                "Received BinaryStateHeader for Gen {}",
+                                telemetry.generation
+                            );
                             return; // Success!
                         }
                         _ => {}
@@ -116,7 +95,6 @@ async fn test_websocket_protocol_handshake() {
     })
     .await;
 
-    // Cleanup
     let _ = server_process.kill();
     let _ = server_process.wait();
 

@@ -132,7 +132,7 @@ window.addEventListener('mouseup', () => {
     if (isDragging) {
         isDragging = false;
         canvas.style.cursor = 'default';
-        requestStateDebounced();
+        updateServerViewportDebounced();
     }
 });
 
@@ -154,7 +154,7 @@ function resizeCanvas() {
         renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     }
     updateInstrumentation();
-    requestStateDebounced();
+    updateServerViewportDebounced();
 }
 window.onresize = resizeCanvas;
 resizeCanvas();
@@ -162,7 +162,7 @@ resizeCanvas();
 
 // Adapted for Hybrid Protocol
 function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
-    const gen = BigInt(meta.generation);
+    const gen = BigInt(meta.telemetry.generation);
 
     // Ensure we don't render stale out-of-order packets.
     // We allow gen === lastRenderedGen to support panning/zooming updates while the simulation is stopped.
@@ -232,18 +232,7 @@ function updateButtonStates() {
     patternSelect.disabled = isRunning;
 }
 
-function requestState() {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-    if (pendingRequest) {
-        nextRequestPending = true;
-        return;
-    }
-
-    pendingRequest = true;
-    pendingRequestEpoch = expectedEpoch;
-
-    // Send JSON Request
+function getViewportPayload() {
     const cx = canvas.width / 2 + offsetX;
     const cy = canvas.height / 2 + offsetY;
 
@@ -253,30 +242,18 @@ function requestState() {
     const min_y = Math.floor((0 - cy) / scale) - padding;
     const max_y = Math.ceil((canvas.height - cy) / scale) + padding;
 
-    // Send JSON Request
-    const viewport = [[min_x, min_y], [max_x, max_y]];
-
-    // Request::GetState { generation, viewport }
-    sendRequest("GetState", {
-        generation: currentGen,
-        viewport
-    });
-
-    // Safety: Auto-reset if stuck (e.g. server crash, dropped packet)
-    // This MUST be inside requestState to cover server-triggered updates (like Reset/Stop)
-    setTimeout(() => {
-        if (pendingRequest) {
-            console.warn("Request timed out, force resetting state");
-            pendingRequest = false;
-            nextRequestPending = false;
-        }
-    }, 2000);
+    return [[min_x, min_y], [max_x, max_y]];
 }
 
-function requestStateDebounced(ms = 250) {
+function updateServerViewport() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    sendRequest("UpdateViewport", { viewport: getViewportPayload() });
+}
+
+function updateServerViewportDebounced(ms = 250) {
     if (debounceTimeout) clearTimeout(debounceTimeout);
     debounceTimeout = setTimeout(() => {
-        requestState();
+        updateServerViewport();
         debounceTimeout = null;
     }, ms);
 }
@@ -337,36 +314,11 @@ function connect() {
         // Line 47: `BinaryStateHeader { generation: u64, ... }`
         // So `header.type` === "BinaryStateHeader", and `header.payload` is the object with fields.
 
-        if (header.type === "SnapshotAvailable") {
-            const { telemetry } = header.payload;
-            const generation = telemetry.generation;
-
-            // Immediately update UI telemetry so controls (Stop/Start/Step) are responsive 
-            // even if a frame isn't actively requested/rendered.
-            if (telemetry.is_running !== undefined && isRunning !== telemetry.is_running) {
-                isRunning = telemetry.is_running;
-                updateButtonStates();
-            }
-            updateTelemetry(telemetry);
-
-            const gen = BigInt(generation);
-            // Any drop in generation represents a simulation reset or seed!
-            // No jitter heuristics needed since protocol is strictly ordered without Auto-Upgrades.
-            if (gen < currentGen) {
-                lastRenderedGen = -1n;
-                expectedEpoch++;
-                updateInstrumentation();
-            }
-            currentGen = gen;
-
-            // Fetch state immediately to avoid trailing-edge debounce starvation
-            requestState();
-        } else if (header.type === "Welcome") {
+        if (header.type === "Welcome") {
             const cores = header.payload.cores;
             coresEl.innerHTML = `[ ${String(cores).padStart(2, '0')} ]`;
 
             // Populate Patterns
-            patternSelect.innerHTML = '<option value="" disabled selected>Select Pattern...</option>';
             if (header.payload.patterns) {
                 header.payload.patterns.forEach(p => {
                     const opt = document.createElement('option');
@@ -377,38 +329,36 @@ function connect() {
                 });
             }
 
-        } else if (header.type === "Ok") {
-            // Missing snapshot 
-            pendingRequest = false;
-            nextRequestPending = false;
-        } else if (header.type === "BinaryStateHeader") {
-            if (expectedEpoch !== pendingRequestEpoch) {
-                // This payload was requested *before* a reset occurred. It is a Ghost from the past!
-                pendingRequest = false;
-                if (nextRequestPending) {
-                    nextRequestPending = false;
-                    requestState();
-                }
-                return;
-            }
+            // Initiate Push Protocol Handshake
+            sendRequest("HandshakeFullSnapshot", { viewport: getViewportPayload() });
 
-            pendingRequest = false;
+        } else if (header.type === "BinaryStateHeader") {
+            const meta = header.payload; // { telemetry, record_count, ... }
+            const generation = meta.telemetry.generation;
+
+            // Update UI telemetry
+            if (meta.telemetry.is_running !== undefined && isRunning !== meta.telemetry.is_running) {
+                isRunning = meta.telemetry.is_running;
+                updateButtonStates();
+            }
+            updateTelemetry(meta.telemetry);
+
+            const gen = BigInt(generation);
+            if (gen < currentGen) {
+                lastRenderedGen = -1n;
+                updateInstrumentation();
+            }
+            currentGen = gen;
 
             // Binary Payload starts after JSON
-            // 4 + jsonLen
             const binaryOffset = 4 + jsonLen;
-            const meta = header.payload; // { generation, population, ... }
 
             renderCellsHybrid(meta, view, binaryOffset);
 
-            // If a new snapshot became available while we were waiting, fetch it now
-            if (nextRequestPending) {
-                nextRequestPending = false;
-                requestState(); // Fast network fetch overlaps browser paint, no RAF delay!
-            }
+            // Acknowledge the frame to request the next one
+            sendRequest("AckPreviousFrame");
+            
         } else if (header.type === "Error") {
-            pendingRequest = false;
-            nextRequestPending = false;
             console.error("Server Error:", header.payload);
         }
     };
@@ -447,7 +397,7 @@ originBtn.onclick = () => {
     expectedEpoch++;
     if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     updateInstrumentation();
-    requestStateDebounced();
+    updateServerViewportDebounced();
 };
 quitBtn.onclick = () => {
     sendRequest("Shutdown");
@@ -493,7 +443,7 @@ function updateZoom(delta, mouseX = null, mouseY = null) {
         renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     }
     updateInstrumentation();
-    requestStateDebounced();
+    updateServerViewportDebounced();
 }
 
 zoomInBtn.onclick = () => updateZoom(1);

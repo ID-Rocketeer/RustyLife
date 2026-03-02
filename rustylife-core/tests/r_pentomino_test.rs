@@ -30,7 +30,7 @@ struct GenerationTracker {
 impl EngineSubscriber for GenerationTracker {
     fn on_snapshot_available(
         &self,
-        data: Arc<Vec<u8>>,
+        data: Arc<Vec<((i128, i128), u8)>>,
         _telemetry: rustylife_core::Telemetry,
     ) -> bool {
         if !data.is_empty() {

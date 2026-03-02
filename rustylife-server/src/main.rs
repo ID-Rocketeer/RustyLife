@@ -34,7 +34,7 @@ use axum::{
 };
 use clap::Parser;
 use rustylife_core::{
-    Request, Response, SimulationPresenter, Telemetry,
+    Request, Response, SimulationPresenter,
     engine::{EngineSubscriber, SimulationEngine},
     space::SimulationSpace,
 };
@@ -86,30 +86,20 @@ pub struct Args {
     pub log_interval: f64,
 }
 
-fn to_cartesian_bounds(
-    bounds: Option<((i128, i128), (i128, i128))>,
-) -> Option<((i128, i128), (i128, i128))> {
-    bounds.map(|((min_x, min_y), (max_x, max_y))| {
-        // Negate Y to convert from top-down to Cartesian (bottom-up)
-        // Swap to maintain bottom-left to top-right ordering
-        ((min_x, -max_y), (max_x, -min_y))
-    })
-}
-
 /// Broadcasts result when a snapshot is ready.
 pub struct ServerEngineSubscriber {
     pub engine: Arc<SimulationEngine>,
-    pub tx: broadcast::Sender<Response>,
+    #[allow(clippy::type_complexity)]
+    pub tx: broadcast::Sender<(Arc<Vec<((i128, i128), u8)>>, rustylife_core::Telemetry)>,
 }
 
 impl EngineSubscriber for ServerEngineSubscriber {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        let resp = Response::SnapshotAvailable { telemetry };
-        let _ = self.tx.send(resp);
+        let _ = self.tx.send((data, telemetry));
         true
     }
 }
@@ -122,7 +112,7 @@ pub struct BenchmarkSubscriber {
 impl EngineSubscriber for BenchmarkSubscriber {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         if telemetry.generation >= self.target_generation {
@@ -144,10 +134,12 @@ struct PresenterSubscriber {
 impl EngineSubscriber for PresenterSubscriber {
     fn on_snapshot_available(
         &self,
-        data: Arc<Vec<u8>>,
+        data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
-        if let Ok(packet) = rustylife_core::decode_binary_packet(&data) {
+        let packet_data =
+            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry);
+        if let Ok(packet) = rustylife_core::decode_binary_packet(&packet_data) {
             let mut presenter = self.presenter.lock().unwrap();
             presenter.update_state(packet, telemetry);
         }
@@ -185,7 +177,7 @@ impl Default for LoggingSubscriber {
 impl EngineSubscriber for LoggingSubscriber {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let now = std::time::Instant::now();
@@ -260,9 +252,18 @@ impl EngineSubscriber for LoggingSubscriber {
 
 struct AppStateEnv {
     engine: Arc<SimulationEngine>,
-    tx: broadcast::Sender<Response>,
+    #[allow(clippy::type_complexity)]
+    tx: broadcast::Sender<(Arc<Vec<((i128, i128), u8)>>, rustylife_core::Telemetry)>,
     shutdown_tx: broadcast::Sender<()>,
     cores: usize,
+}
+
+#[derive(Clone, Debug)]
+enum ClientType {
+    MetricsOnly,
+    FullSnapshot {
+        viewport: Option<((i128, i128), (i128, i128))>,
+    },
 }
 
 struct ServerActionHandler {
@@ -523,7 +524,8 @@ fn main() {
     println!("Loading patterns from ./patterns directory...");
     load_dynamic_patterns(&engine);
 
-    let (tx, _rx) = broadcast::channel::<Response>(100);
+    let (tx, _rx) =
+        broadcast::channel::<(Arc<Vec<((i128, i128), u8)>>, rustylife_core::Telemetry)>(100);
 
     // Register subscriber for real-time broadcasts
     let subscriber = Arc::new(ServerEngineSubscriber {
@@ -727,25 +729,36 @@ fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
     }
 }
 
-fn make_snapshot_response(engine: &SimulationEngine) -> Response {
-    let (gps, work, net) = {
-        let t = engine.telemetry.lock().unwrap();
-        (t.gps, t.work_rate_ema, t.net_rate_ema)
-    };
-    // Transform bounds to Cartesian coordinates
-    let bounds = to_cartesian_bounds(engine.space.bounds());
-
-    let telemetry = Telemetry {
-        generation: engine.generation(),
-        population: engine.living_count.load(Ordering::Relaxed),
-        is_running: !engine.stopping.load(Ordering::Relaxed),
-        gps,
-        work_rate: work,
-        net_rate: net,
-        bounds,
-    };
-
-    Response::SnapshotAvailable { telemetry }
+fn make_current_state_payload(
+    engine: &SimulationEngine,
+    client_type: &Option<ClientType>,
+) -> Option<Vec<u8>> {
+    match client_type {
+        Some(ClientType::MetricsOnly) => {
+            let (_, telemetry) = engine.capture_current_state();
+            let resp = Response::SnapshotAvailable { telemetry };
+            Some(resp.to_bytes())
+        }
+        Some(ClientType::FullSnapshot { viewport }) => {
+            let (data, telemetry) = engine.capture_current_state();
+            let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                data.iter()
+                    .filter(|((x, y), _)| {
+                        *x >= *min_x && *x <= *max_x && *y >= *min_y && *y <= *max_y
+                    })
+                    .copied()
+                    .collect()
+            } else {
+                data
+            };
+            Some(rustylife_core::encode_binary_packet(
+                telemetry.generation,
+                &filtered_cells,
+                telemetry,
+            ))
+        }
+        None => None,
+    }
 }
 
 // Handlers
@@ -798,15 +811,15 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
     let mut rx = state.tx.subscribe();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
 
+    let mut is_ready_for_next_frame = false;
+    let mut client_type: Option<ClientType> = None;
+
     // Send Welcome message
     let welcome = Response::Welcome {
         cores: state.cores,
         patterns: state.engine.get_catalog(),
     };
     let _ = socket.send(Message::Binary(welcome.to_bytes())).await;
-
-    let resp = make_snapshot_response(&state.engine);
-    let _ = socket.send(Message::Binary(resp.to_bytes())).await;
 
     loop {
         tokio::select! {
@@ -818,15 +831,40 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
 
                     if let Some(req) = req {
                         match req {
+                            Request::HandshakeMetricsOnly => {
+                                client_type = Some(ClientType::MetricsOnly);
+                                if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                    let _ = socket.send(Message::Binary(payload)).await;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                            Request::HandshakeFullSnapshot { viewport } => {
+                                client_type = Some(ClientType::FullSnapshot { viewport });
+                                if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                    let _ = socket.send(Message::Binary(payload)).await;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                            Request::AckPreviousFrame => {
+                                is_ready_for_next_frame = true;
+                            }
+                            Request::UpdateViewport { viewport } => {
+                                if let Some(ClientType::FullSnapshot { viewport: ref mut vp }) = client_type {
+                                    *vp = Some(viewport);
+                                    if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                        let _ = socket.send(Message::Binary(payload)).await;
+                                    }
+                                    is_ready_for_next_frame = false;
+                                }
+                            }
                             Request::NextStep => {
                                 state.engine.step();
                             }
                             Request::Reset => {
                                 state.engine.reset();
                             }
-                            Request::GetState { generation, viewport } => {
-                                let resp = handle_get_state(&state, generation, viewport).await;
-                                let _ = socket.send(Message::Binary(resp)).await;
+                            Request::GetState { .. } => {
+                                // Ignored in push architecture
                             }
                             Request::Start => {
                                 state.engine.start();
@@ -841,8 +879,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 .await;
 
                                 // Force a UI update so the client knows we stopped
-                                let resp = make_snapshot_response(&state.engine);
-                                let _ = socket.send(Message::Binary(resp.to_bytes())).await;
+                                if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                    let _ = socket.send(Message::Binary(payload)).await;
+                                }
                             }
                             Request::Seed(pattern) => {
                                 state.engine.seed(pattern);
@@ -866,10 +905,36 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                 break;
             }
             result = rx.recv() => {
-                if let Ok(resp) = result {
-                    // resp is already Response::SnapshotAvailable
-                    if socket.send(Message::Binary(resp.to_bytes())).await.is_err() {
-                        break;
+                #[allow(clippy::collapsible_if)]
+                if let Ok((data, telemetry)) = result {
+                    if is_ready_for_next_frame {
+                        match client_type {
+                            Some(ClientType::MetricsOnly) => {
+                                let resp = Response::SnapshotAvailable { telemetry };
+                                if socket.send(Message::Binary(resp.to_bytes())).await.is_err() {
+                                    break;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                            Some(ClientType::FullSnapshot { viewport }) => {
+                                let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                                    data.iter()
+                                        .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                                        .copied()
+                                        .collect()
+                                } else {
+                                    // if no viewport specified, send all cells
+                                    data.iter().copied().collect()
+                                };
+
+                                let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
+                                if socket.send(Message::Binary(payload)).await.is_err() {
+                                    break;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                            None => {}
+                        }
                     }
                 }
             }
@@ -883,16 +948,15 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
     let mut rx = state.tx.subscribe();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
 
+    let mut is_ready_for_next_frame = false;
+    let mut client_type: Option<ClientType> = None;
+
     // Send Welcome message
     let welcome = Response::Welcome {
         cores: state.cores,
         patterns: state.engine.get_catalog(),
     };
     let bytes = welcome.to_bytes();
-    let _ = writer.write_all(&bytes).await;
-
-    let resp = make_snapshot_response(&state.engine);
-    let bytes = resp.to_bytes();
     let _ = writer.write_all(&bytes).await;
 
     loop {
@@ -920,11 +984,36 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
 
                 if let Some(req) = req {
                     match req {
+                        Request::HandshakeMetricsOnly => {
+                            client_type = Some(ClientType::MetricsOnly);
+                            if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                let _ = writer.write_all(&payload).await;
+                            }
+                            is_ready_for_next_frame = false;
+                        }
+                        Request::HandshakeFullSnapshot { viewport } => {
+                            client_type = Some(ClientType::FullSnapshot { viewport });
+                            if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                let _ = writer.write_all(&payload).await;
+                            }
+                            is_ready_for_next_frame = false;
+                        }
+                        Request::AckPreviousFrame => {
+                            is_ready_for_next_frame = true;
+                        }
+                        Request::UpdateViewport { viewport } => {
+                            if let Some(ClientType::FullSnapshot { viewport: ref mut vp }) = client_type {
+                                *vp = Some(viewport);
+                                if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                    let _ = writer.write_all(&payload).await;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                        }
                         Request::NextStep => { state.engine.step(); }
                         Request::Reset => { state.engine.reset(); }
-                        Request::GetState { generation, viewport } => {
-                            let bytes = handle_get_state(&state, generation, viewport).await;
-                            let _ = writer.write_all(&bytes).await;
+                        Request::GetState { .. } => {
+                            // Ignored
                         }
                         Request::Start => {
                             println!("IPC: Received Start Request");
@@ -948,53 +1037,39 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                 break;
             }
             result = rx.recv() => {
-                if let Ok(resp) = result {
-                    let bytes = resp.to_bytes();
-                    if writer.write_all(&bytes).await.is_err() {
-                        break;
+                #[allow(clippy::collapsible_if)]
+                if let Ok((data, telemetry)) = result {
+                    if is_ready_for_next_frame {
+                        match client_type {
+                            Some(ClientType::MetricsOnly) => {
+                                let resp = Response::SnapshotAvailable { telemetry };
+                                let bytes = resp.to_bytes();
+                                if writer.write_all(&bytes).await.is_err() {
+                                    break;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                            Some(ClientType::FullSnapshot { viewport }) => {
+                                let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                                    data.iter()
+                                        .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                                        .copied()
+                                        .collect()
+                                } else {
+                                    data.iter().copied().collect()
+                                };
+
+                                let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
+                                if writer.write_all(&payload).await.is_err() {
+                                    break;
+                                }
+                                is_ready_for_next_frame = false;
+                            }
+                            None => {}
+                        }
                     }
                 }
             }
-        }
-    }
-}
-
-async fn handle_get_state(
-    state: &Arc<AppStateEnv>,
-    generation: u64,
-    viewport: Option<((i128, i128), (i128, i128))>,
-) -> Vec<u8> {
-    let snapshot = state.engine.snapshots.get(generation);
-
-    if snapshot.is_none() {
-        // Return Ok as a silent signal that no data is available for this generation.
-        // This prevents console spam in clients during UI events (zoom/pan) while
-        // also allowing the client to clear its 'pending_request' flag.
-        return Response::Ok.to_bytes();
-    }
-
-    let data = snapshot.unwrap();
-
-    // Always decode and re-encode to ensure proper BinaryStateHeader format
-    match rustylife_core::decode_binary_packet(&data) {
-        Ok(packet) => {
-            let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                packet
-                    .cells()
-                    .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
-                    .collect()
-            } else {
-                packet.cells().collect()
-            };
-
-            rustylife_core::encode_binary_packet(
-                packet.generation,
-                &filtered_cells,
-                packet.telemetry,
-            )
-        }
-        Err(e) => {
-            Response::Error(format!("Failed to decode snapshot for filtering: {}", e)).to_bytes()
         }
     }
 }
@@ -1088,6 +1163,7 @@ mod crash_telemetry_tests {
         let sub = LoggingSubscriber::new(20.0);
         let telemetry = rustylife_core::Telemetry {
             generation: 1,
+            timestamp: 0,
             population: 100,
             is_running: true,
             gps: 0.0,
@@ -1140,6 +1216,7 @@ mod crash_telemetry_tests {
         let sub = LoggingSubscriber::new(0.0);
         let telemetry = rustylife_core::Telemetry {
             generation: 1,
+            timestamp: 0,
             population: 100,
             is_running: true,
             gps: 0.0,

@@ -335,7 +335,7 @@ struct CompletionTracker {
 impl EngineSubscriber for CompletionTracker {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         self.current.fetch_add(1, Ordering::SeqCst);

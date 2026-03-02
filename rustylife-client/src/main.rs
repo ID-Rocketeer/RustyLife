@@ -60,11 +60,10 @@ impl UserActionHandler for ClientActionHandler {
     fn seed(&mut self, pattern: String) {
         let _ = self.tx.try_send(Request::Seed(pattern));
     }
-    fn request_state(&mut self, generation: u64, viewport: Option<((i128, i128), (i128, i128))>) {
-        let _ = self.tx.try_send(Request::GetState {
-            generation,
-            viewport,
-        });
+    fn request_state(&mut self, _generation: u64, viewport: Option<((i128, i128), (i128, i128))>) {
+        if let Some(vp) = viewport {
+            let _ = self.tx.try_send(Request::UpdateViewport { viewport: vp });
+        }
     }
     fn shutdown(&mut self) {
         // Send shutdown request to server (?) or just disconnect?
@@ -105,10 +104,6 @@ async fn main() -> anyhow::Result<()> {
                     s.is_connected = true;
                 }
 
-                let mut pending_request = false;
-                let mut next_request_needed = false;
-                let mut latest_generation = 0;
-
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
                 loop {
@@ -129,31 +124,16 @@ async fn main() -> anyhow::Result<()> {
                             if let Ok(response) = serde_json::from_slice::<rustylife_core::Response>(&json_payload) {
                                 match response {
                                     rustylife_core::Response::Welcome { cores, patterns } => {
-                                        let mut s = state_clone.lock().unwrap();
-                                        s.cores = cores;
-                                        s.patterns = patterns;
+                                        let req = {
+                                            let mut s = state_clone.lock().unwrap();
+                                            s.cores = cores;
+                                            s.patterns = patterns;
+                                            Request::HandshakeFullSnapshot { viewport: s.target_viewport }
+                                        };
+                                        let _ = writer.write_all(&req.to_bytes()).await;
                                     }
-                                    rustylife_core::Response::SnapshotAvailable { telemetry } => {
-                                        latest_generation = telemetry.generation;
-
-                                        // We no longer need to cache this telemetry for rendering,
-                                        // since it will be fully embedded in the BinaryStateHeader.
-
-                                        // We can still update bounds immediately if we want "predicted" bounds,
-                                        // or wait for the sync. User specified atomic update.
-                                        // But we should at least track the latest gen for requests.
-
-                                        if !pending_request {
-                                            // Send Request for data
-                                            let viewport = {
-                                                state_clone.lock().unwrap().target_viewport
-                                            };
-                                            let req = Request::GetState { generation: telemetry.generation, viewport };
-                                            let _ = writer.write_all(&req.to_bytes()).await;
-                                            pending_request = true;
-                                        } else {
-                                            next_request_needed = true;
-                                        }
+                                    rustylife_core::Response::SnapshotAvailable { .. } => {
+                                        // Ignored in push architecture
                                     }
                                     rustylife_core::Response::BinaryStateHeader { record_count, .. } => {
                                         // Binary Payload follows
@@ -176,51 +156,25 @@ async fn main() -> anyhow::Result<()> {
                                             }
                                         }
 
-                                        pending_request = false;
-                                        if next_request_needed {
-                                            next_request_needed = false;
-                                            // Send Request for latest available generation
-                                            let viewport = {
-                                                state_clone.lock().unwrap().target_viewport
-                                            };
-                                            let req = Request::GetState { generation: latest_generation, viewport };
-                                            let _ = writer.write_all(&req.to_bytes()).await;
-                                            pending_request = true;
-                                        }
+                                        // Acknowledge receipt of the frame to get the next one
+                                        let _ = writer.write_all(&Request::AckPreviousFrame.to_bytes()).await;
                                     }
                                     rustylife_core::Response::Error(msg) => {
                                         // Ignore 'not found' errors (though server now sends Ok)
                                         if !msg.contains("not found") {
                                             println!("Server Error: {}", msg);
                                         }
-                                        pending_request = false;
                                     }
                                     rustylife_core::Response::Ok => {
-                                        // Silent No-Op (e.g. from GetState on a missing snapshot)
-                                        pending_request = false;
-                                        if next_request_needed {
-                                            next_request_needed = false;
-                                            let viewport = {
-                                                state_clone.lock().unwrap().target_viewport
-                                            };
-                                            let req = Request::GetState { generation: latest_generation, viewport };
-                                            let _ = writer.write_all(&req.to_bytes()).await;
-                                            pending_request = true;
-                                        }
+                                        // Silent No-Op
                                     }
                                 }
                             }
                         }
                         Some(req) = rx.recv() => {
-                            if let Request::GetState { generation, .. } = &req {
-                                if !pending_request {
-                                    pending_request = true;
-                                    if writer.write_all(&req.to_bytes()).await.is_err() {
-                                        break;
-                                    }
-                                } else {
-                                    latest_generation = *generation;
-                                    next_request_needed = true;
+                            if let Request::UpdateViewport { .. } = &req {
+                                if writer.write_all(&req.to_bytes()).await.is_err() {
+                                    break;
                                 }
                             } else if writer.write_all(&req.to_bytes()).await.is_err() {
                                 break;

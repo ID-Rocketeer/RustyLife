@@ -51,7 +51,11 @@ fn test_place_cell_maintains_living_count() {
 
     struct Latch(Mutex<Option<u64>>, Condvar);
     impl EngineSubscriber for Latch {
-        fn on_snapshot_available(&self, _data: Arc<Vec<u8>>, telemetry: Telemetry) -> bool {
+        fn on_snapshot_available(
+            &self,
+            _data: Arc<Vec<((i128, i128), u8)>>,
+            telemetry: Telemetry,
+        ) -> bool {
             *self.0.lock().unwrap() = Some(telemetry.population);
             self.1.notify_all();
             true

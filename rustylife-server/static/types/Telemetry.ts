@@ -3,4 +3,4 @@
 /**
  * Shared telemetry metrics for all interfaces.
  */
-export type Telemetry = { generation: bigint, population: bigint, is_running: boolean, gps: number, work_rate: number, net_rate: number, bounds: [[bigint, bigint], [bigint, bigint]] | null, };
+export type Telemetry = { generation: bigint, timestamp: bigint, population: bigint, is_running: boolean, gps: number, work_rate: number, net_rate: number, bounds: [[bigint, bigint], [bigint, bigint]] | null, };

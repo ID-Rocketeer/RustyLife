@@ -19,60 +19,8 @@ use crate::PatternInfo;
 use crate::scratchpad::{Candidate, Scratchpad};
 use crate::space::SimulationSpace;
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
-
-pub struct SnapshotStore {
-    store: RwLock<HashMap<u64, Arc<Vec<u8>>>>,
-}
-
-impl SnapshotStore {
-    pub fn new() -> Self {
-        Self {
-            store: RwLock::new(HashMap::new()),
-        }
-    }
-}
-
-impl Default for SnapshotStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SnapshotStore {
-    pub fn insert(&self, generation: u64, data: Arc<Vec<u8>>) {
-        if let Ok(mut lock) = self.store.write() {
-            lock.insert(generation, data);
-
-            // Prune old snapshots to prevent unbounded memory growth
-            // Keep last 1000 generations (increased from 200 to handle fast-running engines)
-            if generation > 1000 {
-                lock.remove(&(generation - 1000));
-            }
-        }
-    }
-
-    pub fn get(&self, generation: u64) -> Option<Arc<Vec<u8>>> {
-        if let Ok(lock) = self.store.read() {
-            lock.get(&generation).cloned()
-        } else {
-            None
-        }
-    }
-
-    pub fn get_latest(&self) -> Option<(u64, Arc<Vec<u8>>)> {
-        if let Ok(lock) = self.store.read() {
-            lock.keys()
-                .max()
-                .cloned()
-                .and_then(|generation| lock.get(&generation).map(|data| (generation, data.clone())))
-        } else {
-            None
-        }
-    }
-}
+use std::sync::{Arc, Mutex};
 
 pub enum Tasks {
     SpreadBatch(usize, usize),
@@ -97,18 +45,11 @@ pub enum IoTask {
     },
 }
 
-#[derive(Debug, Clone)]
-pub struct SnapshotRecord {
-    pub x: i128,
-    pub y: i128,
-    pub state: u8,
-}
-
 pub trait EngineSubscriber: Send + Sync {
     fn on_snapshot_available(
         &self,
         // generation: u64,
-        data: Arc<Vec<u8>>,
+        data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: crate::Telemetry,
     ) -> bool;
 }
@@ -277,7 +218,6 @@ pub struct Engine {
     pub stopping: AtomicBool,
     pub tainted: AtomicBool,
     pub subscribers: Mutex<Vec<Arc<dyn EngineSubscriber>>>,
-    pub record_buffers: Vec<Vec<Mutex<Vec<SnapshotRecord>>>>,
     pub epoch: AtomicU64,
     pub telemetry: Mutex<Telemetry>,
     #[allow(clippy::type_complexity)]
@@ -290,11 +230,9 @@ pub struct Engine {
     // Thread-local buffers for commit phase to avoid reallocation
     pub commit_buffers: Vec<crate::scratchpad::CachePadded<UnsafeCell<CommitBuffer>>>,
 
-    pub snapshots: SnapshotStore,
     pub patterns: Mutex<Vec<PatternInfo>>,
     pub active_pattern: Mutex<Option<String>>,
     pub io_tx: std::sync::mpsc::SyncSender<IoTask>,
-    pub io_pool_rx: crossbeam_channel::Receiver<Vec<((i128, i128), u8)>>,
 
     // Command Serialization
     pub command_tx: crossbeam_channel::Sender<EngineCommand>,
@@ -311,15 +249,6 @@ unsafe impl Sync for Engine {}
 impl Engine {
     pub fn new(space: Arc<SimulationSpace>, pool_size: usize) -> Arc<Self> {
         let bucket_count = space.storage().buckets.len();
-        let buffer_count = 2; // Double buffered recording
-        let mut record_buffers = Vec::with_capacity(buffer_count);
-        for _ in 0..buffer_count {
-            let mut bucket_buffers = Vec::with_capacity(bucket_count);
-            for _ in 0..bucket_count {
-                bucket_buffers.push(Mutex::new(Vec::with_capacity(1024)));
-            }
-            record_buffers.push(bucket_buffers);
-        }
 
         // Initialize commit buffers
         let mut commit_buffers = Vec::with_capacity(pool_size);
@@ -335,7 +264,6 @@ impl Engine {
         let initial_pop = space.total_population();
 
         let (io_tx, io_rx) = std::sync::mpsc::sync_channel(2);
-        let (io_pool_tx, io_pool_rx) = crossbeam_channel::unbounded();
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
 
         let engine = Arc::new(Self {
@@ -354,18 +282,15 @@ impl Engine {
             stopping: AtomicBool::new(true),
             tainted: AtomicBool::new(false),
             subscribers: Mutex::new(Vec::new()),
-            record_buffers,
             epoch: AtomicU64::new(0),
             telemetry: Mutex::new(Telemetry::new()),
             phase_counter: AtomicUsize::new(0),
             commit_buffers,
-            snapshots: SnapshotStore::new(),
             patterns: Mutex::new(Vec::new()),
             active_pattern: Mutex::new(None),
             current_generation_bounds: Mutex::new(None),
             transition_lock: Mutex::new(()),
             io_tx,
-            io_pool_rx,
             command_tx,
             command_rx,
         });
@@ -384,7 +309,7 @@ impl Engine {
         std::thread::Builder::new()
             .name("Worker-IO".to_string())
             .spawn(move || {
-                Self::run_io_worker(io_engine_clone, io_rx, io_pool_tx);
+                Self::run_io_worker(io_engine_clone, io_rx);
             })
             .expect("Failed to spawn IO thread");
 
@@ -395,7 +320,11 @@ impl Engine {
         self.subscribers.lock().unwrap().push(subscriber);
     }
 
-    pub fn notify_subscribers(&self, packet: Arc<Vec<u8>>, telemetry: crate::Telemetry) {
+    pub fn notify_subscribers(
+        &self,
+        packet: Arc<Vec<((i128, i128), u8)>>,
+        telemetry: crate::Telemetry,
+    ) {
         let mut subscribers = self.subscribers.lock().unwrap();
         subscribers.retain(|sub| sub.on_snapshot_available(packet.clone(), telemetry));
     }
@@ -1105,7 +1034,41 @@ impl Engine {
         }
     }
 
-    fn capture_state(&self, is_running: bool) {
+    #[allow(clippy::type_complexity)]
+    pub fn capture_current_state(&self) -> (Vec<((i128, i128), u8)>, crate::Telemetry) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        // We now just allocate a fresh Vector per generation for zero-copy ownership transfer
+        let living_count = self.living_count.load(Ordering::SeqCst) as usize;
+        let mut vec = Vec::with_capacity(living_count + (living_count / 4));
+
+        self.space.collect_all_states_into(&mut vec);
+
+        // Capture telemetry synchronously
+        let (gps, work_rate, net_rate) = {
+            let t = self.telemetry.lock().unwrap();
+            (t.gps, t.work_rate_ema, t.net_rate_ema)
+        };
+        let bounds = *self.current_generation_bounds.lock().unwrap();
+        let is_running = !self.stopping.load(Ordering::SeqCst);
+
+        let telemetry = crate::Telemetry {
+            generation,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64,
+            population: living_count as u64,
+            is_running,
+            gps,
+            work_rate,
+            net_rate,
+            bounds: crate::Telemetry::to_cartesian_bounds(bounds),
+        };
+
+        (vec, telemetry)
+    }
+
+    fn capture_state(&self, _is_running: bool) {
         let generation = self.generation.load(Ordering::SeqCst);
         let work = self.work.load(Ordering::SeqCst); // Accumulator
         let net = self.net.load(Ordering::SeqCst);
@@ -1158,35 +1121,7 @@ impl Engine {
             self.telemetry.lock().unwrap().reset();
         }
 
-        // Extract cells using Memory Pooling
-        let mut vec = self.io_pool_rx.try_recv().unwrap_or_else(|_| Vec::new());
-        let living_count = self.living_count.load(Ordering::SeqCst) as usize;
-
-        // Ensure capacity with 25% headroom if reallocation is needed
-        if vec.capacity() < living_count {
-            let required_cap = living_count.saturating_add(living_count / 4);
-            // capacity is smaller than length needed. subtract length just to be safe for reserve API
-            let reserve_amount = required_cap.saturating_sub(vec.len());
-            vec.reserve(reserve_amount);
-        }
-
-        self.space.collect_all_states_into(&mut vec);
-
-        // Capture telemetry synchronously
-        let (gps, work_rate, net_rate) = {
-            let t = self.telemetry.lock().unwrap();
-            (t.gps, t.work_rate_ema, t.net_rate_ema)
-        };
-        let bounds = *self.current_generation_bounds.lock().unwrap();
-        let telemetry = crate::Telemetry {
-            generation,
-            population: living_count as u64,
-            is_running,
-            gps,
-            work_rate,
-            net_rate,
-            bounds: crate::Telemetry::to_cartesian_bounds(bounds),
-        };
+        let (vec, telemetry) = self.capture_current_state();
 
         // Fire to async I/O worker
         let _ = self.io_tx.send(IoTask::Snapshot {
@@ -1196,30 +1131,17 @@ impl Engine {
         });
     }
 
-    fn run_io_worker(
-        engine: Arc<Self>,
-        io_rx: std::sync::mpsc::Receiver<IoTask>,
-        io_pool_tx: crossbeam_channel::Sender<Vec<((i128, i128), u8)>>,
-    ) {
+    fn run_io_worker(engine: Arc<Self>, io_rx: std::sync::mpsc::Receiver<IoTask>) {
         while let Ok(IoTask::Snapshot {
-            generation,
-            mut cells,
+            generation: _,
+            cells,
             telemetry,
         }) = io_rx.recv()
         {
-            // Serialize
-            let packet_data = crate::encode_binary_packet(generation, &cells, telemetry);
-            let packet = Arc::new(packet_data);
-
-            // Store
-            engine.snapshots.insert(generation, packet.clone());
+            let packet = Arc::new(cells);
 
             // Notify
             engine.notify_subscribers(packet, telemetry);
-
-            // Recycle memory block
-            cells.clear();
-            let _ = io_pool_tx.send(cells);
         }
     }
 }

@@ -33,11 +33,38 @@ fn test_request_serialization() {
 }
 
 #[test]
+fn test_handshake_serialization() {
+    let hs_metrics = Request::HandshakeMetricsOnly;
+    let json = serde_json::to_string(&hs_metrics).unwrap();
+    let de_hs_metrics: Request = serde_json::from_str(&json).unwrap();
+    assert_eq!(hs_metrics, de_hs_metrics);
+
+    let hs_full = Request::HandshakeFullSnapshot {
+        viewport: Some(((-10, -10), (10, 10))),
+    };
+    let json_full = serde_json::to_string(&hs_full).unwrap();
+    let de_hs_full: Request = serde_json::from_str(&json_full).unwrap();
+    assert_eq!(hs_full, de_hs_full);
+
+    let ack = Request::AckPreviousFrame;
+    let de_ack: Request = serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
+    assert_eq!(ack, de_ack);
+
+    let up_view = Request::UpdateViewport {
+        viewport: ((-5, -5), (5, 5)),
+    };
+    let de_up_view: Request =
+        serde_json::from_str(&serde_json::to_string(&up_view).unwrap()).unwrap();
+    assert_eq!(up_view, de_up_view);
+}
+
+#[test]
 fn test_binary_packet_with_telemetry() {
     let cells = vec![((1, 2), 0b11), ((3, 4), 0b10)];
     let generation = 100;
     let telemetry = rustylife_core::Telemetry {
         generation: 100,
+        timestamp: 1715494444000,
         population: 50,
         is_running: true,
         gps: 120.5,

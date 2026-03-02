@@ -59,7 +59,7 @@ describe('Dashboard Panning & Zooming', () => {
 
         const metaStr = JSON.stringify({
             type: "BinaryStateHeader",
-            payload: { generation: 1, record_count: 1, is_running: false, population: 1 }
+            payload: { record_count: 1, telemetry: { generation: 1, is_running: false, population: 1 } }
         });
 
         const metaBytes = new TextEncoder().encode(metaStr);
@@ -111,8 +111,8 @@ describe('Dashboard Panning & Zooming', () => {
 
         // 2. Setup currentGen > 0
         const msg1 = JSON.stringify({
-            type: "SnapshotAvailable",
-            payload: { telemetry: { generation: 1 } }
+            type: "BinaryStateHeader",
+            payload: { record_count: 0, telemetry: { generation: 1 } }
         });
         const bytes1 = new TextEncoder().encode(msg1);
         const buf1 = new ArrayBuffer(4 + bytes1.length);
@@ -120,10 +120,10 @@ describe('Dashboard Panning & Zooming', () => {
         new Uint8Array(buf1).set(bytes1, 4);
         wsInstance.onmessage({ data: buf1 });
 
-        // 3. Simulate "Reset" (SnapshotAvailable with gen 0)
+        // 3. Simulate "Reset" (BinaryStateHeader with gen 0)
         const msg0 = JSON.stringify({
-            type: "SnapshotAvailable",
-            payload: { telemetry: { generation: 0 } }
+            type: "BinaryStateHeader",
+            payload: { record_count: 0, telemetry: { generation: 0 } }
         });
         const bytes0 = new TextEncoder().encode(msg0);
         const buf0 = new ArrayBuffer(4 + bytes0.length);

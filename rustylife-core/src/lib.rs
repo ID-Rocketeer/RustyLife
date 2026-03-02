@@ -61,6 +61,14 @@ pub enum Request {
     Stop,
     Seed(String),
     Shutdown,
+    HandshakeMetricsOnly,
+    HandshakeFullSnapshot {
+        viewport: Option<((i128, i128), (i128, i128))>,
+    },
+    AckPreviousFrame,
+    UpdateViewport {
+        viewport: ((i128, i128), (i128, i128)),
+    },
 }
 
 /// Shared telemetry metrics for all interfaces.
@@ -68,6 +76,7 @@ pub enum Request {
 #[ts(export, export_to = "../../rustylife-server/static/types/")]
 pub struct Telemetry {
     pub generation: u64,
+    pub timestamp: i64,
     pub population: u64,
     pub is_running: bool,
     pub gps: f64,
@@ -339,6 +348,7 @@ mod tests {
         let generation_count = 101;
         let mock_telemetry = Telemetry {
             generation: generation_count,
+            timestamp: 1715494444000,
             population: 2,
             is_running: true,
             gps: 0.0,
@@ -361,6 +371,7 @@ mod tests {
         let cells = vec![((0, 0), 0b11)];
         let mock_telemetry = Telemetry {
             generation: 1,
+            timestamp: 1715494444000,
             population: 1,
             is_running: true,
             gps: 0.0,

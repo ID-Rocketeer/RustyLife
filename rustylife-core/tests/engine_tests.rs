@@ -104,7 +104,7 @@ impl TestSync {
 impl EngineSubscriber for TestSync {
     fn on_snapshot_available(
         &self,
-        _data: Arc<Vec<u8>>,
+        _data: Arc<Vec<((i128, i128), u8)>>,
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let mut guard = self.state.lock().unwrap();
@@ -669,19 +669,17 @@ fn test_reset_stability() {
         let living = engine
             .living_count
             .load(std::sync::atomic::Ordering::SeqCst);
-        let has_snapshot = engine.snapshots.get(0).is_some();
         let flight = engine.work_queue_in_flight();
 
-        // After reset: generation=0, has_snapshot=true (initial), flight=0
-        // living_count might be > 0 if a pattern was reloaded
-        if generation == 0 && has_snapshot && flight == 0 {
+        // After reset: generation=0, flight=0
+        if generation == 0 && flight == 0 {
             break;
         }
 
         if start_reset.elapsed().as_secs() > 5 {
             panic!(
-                "Timed out waiting for Reset (Gen: {}, Alive: {}, Snap: {}, Flight: {})",
-                generation, living, has_snapshot, flight
+                "Timed out waiting for Reset (Gen: {}, Alive: {}, Flight: {})",
+                generation, living, flight
             );
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
