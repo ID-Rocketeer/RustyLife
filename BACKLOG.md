@@ -20,7 +20,7 @@ This document tracks future features, investigations, and known issues that have
 - [x] **Windows Suspension Prevention (Advanced):** Investigate `PowerCreateRequest` as a more robust alternative to `SetThreadExecutionState` for preventing system sleep under aggressive power policies.
 
 ## Memory Management
-- [ ] **Parallelize Aggressive Scrubber:** The current `space.prune()` operation runs synchronously on a single thread when `dead_blocks > 1000`, causing a "Stop the World" pause that penalizes GPS. Investigate leveraging the existing worker pool to parallelize this `prune()` operation across the `BlockArena` buckets.
+- [x] **Parallelize Aggressive Scrubber:** The current `space.prune()` operation runs synchronously on a single thread when `dead_blocks > 1000`, causing a "Stop the World" pause that penalizes GPS. Investigate leveraging the existing worker pool to parallelize this `prune()` operation across the `BlockArena` buckets. (Completed in commit ce275d3)
     - If each of the 185 buckets is protected by its own lock, the `Scrub Leader` could enqueue `Tasks::PruneBucket(idx)` to the `WorkQueue`.
     - This would allow all idle threads to wake up and participate in the deep clean simultaneously, drastically reducing the pause duration and significantly improving overall GPS without risking OS-level OOM aborts.
 - [ ] **Longevity A/B Testing & Threshold Tuning:** Once `prune()` is fully parallelized, conduct formal A/B tests to evaluate if we can relax the current "aggressive" 1000-block threshold. Determine if the multi-threaded scrubber is fast enough to allow higher thresholds (e.g., 5000 dead blocks) to prioritize simulation throughput between scrubs without risking memory exhaustion.
