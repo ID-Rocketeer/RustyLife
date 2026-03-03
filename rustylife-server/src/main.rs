@@ -813,6 +813,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
 
     let mut is_ready_for_next_frame = false;
     let mut client_type: Option<ClientType> = None;
+    let mut last_sent_generation = 0;
 
     // Send Welcome message
     let welcome = Response::Welcome {
@@ -835,6 +836,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 client_type = Some(ClientType::MetricsOnly);
                                 if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                     let _ = socket.send(Message::Binary(payload)).await;
+                                    last_sent_generation = state.engine.generation();
                                 }
                                 is_ready_for_next_frame = false;
                             }
@@ -842,17 +844,30 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 client_type = Some(ClientType::FullSnapshot { viewport });
                                 if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                     let _ = socket.send(Message::Binary(payload)).await;
+                                    last_sent_generation = state.engine.generation();
                                 }
                                 is_ready_for_next_frame = false;
                             }
                             Request::AckPreviousFrame => {
-                                is_ready_for_next_frame = true;
+                                let engine_gen = state.engine.generation();
+                                if engine_gen > last_sent_generation {
+                                    if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                        let _ = socket.send(Message::Binary(payload)).await;
+                                        last_sent_generation = engine_gen;
+                                        is_ready_for_next_frame = false;
+                                    } else {
+                                        is_ready_for_next_frame = true;
+                                    }
+                                } else {
+                                    is_ready_for_next_frame = true;
+                                }
                             }
                             Request::UpdateViewport { viewport } => {
                                 if let Some(ClientType::FullSnapshot { viewport: ref mut vp }) = client_type {
                                     *vp = Some(viewport);
                                     if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                         let _ = socket.send(Message::Binary(payload)).await;
+                                        last_sent_generation = state.engine.generation();
                                     }
                                     is_ready_for_next_frame = false;
                                 }
@@ -881,6 +896,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 // Force a UI update so the client knows we stopped
                                 if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                     let _ = socket.send(Message::Binary(payload)).await;
+                                    last_sent_generation = state.engine.generation();
                                 }
                             }
                             Request::Seed(pattern) => {
@@ -914,6 +930,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 if socket.send(Message::Binary(resp.to_bytes())).await.is_err() {
                                     break;
                                 }
+                                last_sent_generation = telemetry.generation;
                                 is_ready_for_next_frame = false;
                             }
                             Some(ClientType::FullSnapshot { viewport }) => {
@@ -931,6 +948,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 if socket.send(Message::Binary(payload)).await.is_err() {
                                     break;
                                 }
+                                last_sent_generation = telemetry.generation;
                                 is_ready_for_next_frame = false;
                             }
                             None => {}
@@ -950,6 +968,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
 
     let mut is_ready_for_next_frame = false;
     let mut client_type: Option<ClientType> = None;
+    let mut last_sent_generation = 0;
 
     // Send Welcome message
     let welcome = Response::Welcome {
@@ -988,6 +1007,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                             client_type = Some(ClientType::MetricsOnly);
                             if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                 let _ = writer.write_all(&payload).await;
+                                last_sent_generation = state.engine.generation();
                             }
                             is_ready_for_next_frame = false;
                         }
@@ -995,17 +1015,30 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                             client_type = Some(ClientType::FullSnapshot { viewport });
                             if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                 let _ = writer.write_all(&payload).await;
+                                last_sent_generation = state.engine.generation();
                             }
                             is_ready_for_next_frame = false;
                         }
                         Request::AckPreviousFrame => {
-                            is_ready_for_next_frame = true;
+                            let engine_gen = state.engine.generation();
+                            if engine_gen > last_sent_generation {
+                                if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                    let _ = writer.write_all(&payload).await;
+                                    last_sent_generation = engine_gen;
+                                    is_ready_for_next_frame = false;
+                                } else {
+                                    is_ready_for_next_frame = true;
+                                }
+                            } else {
+                                is_ready_for_next_frame = true;
+                            }
                         }
                         Request::UpdateViewport { viewport } => {
                             if let Some(ClientType::FullSnapshot { viewport: ref mut vp }) = client_type {
                                 *vp = Some(viewport);
                                 if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
                                     let _ = writer.write_all(&payload).await;
+                                    last_sent_generation = state.engine.generation();
                                 }
                                 is_ready_for_next_frame = false;
                             }
@@ -1047,6 +1080,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                                 if writer.write_all(&bytes).await.is_err() {
                                     break;
                                 }
+                                last_sent_generation = telemetry.generation;
                                 is_ready_for_next_frame = false;
                             }
                             Some(ClientType::FullSnapshot { viewport }) => {
@@ -1063,6 +1097,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                                 if writer.write_all(&payload).await.is_err() {
                                     break;
                                 }
+                                last_sent_generation = telemetry.generation;
                                 is_ready_for_next_frame = false;
                             }
                             None => {}
