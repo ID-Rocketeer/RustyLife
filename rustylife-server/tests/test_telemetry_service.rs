@@ -1,0 +1,115 @@
+// Copyright (C) 2026 Steven P. Collins. All rights reserved.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+use futures_util::{SinkExt, StreamExt};
+use rustylife_core::{Request, Response};
+use std::time::Duration;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use url::Url;
+
+// Helper to encode Request as [Len][JSON]
+fn encode_request(req: &Request) -> Vec<u8> {
+    let json = serde_json::to_vec(req).unwrap();
+    let len = json.len() as u32;
+    let mut buf = Vec::with_capacity(4 + json.len());
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(&json);
+    buf
+}
+
+#[tokio::test]
+async fn test_telemetry_service() {
+    let status = std::process::Command::new("cargo")
+        .args(["build", "--bin", "rustylife-server"])
+        .status()
+        .expect("Failed to build server");
+    assert!(status.success());
+
+    let mut server_process = std::process::Command::new("cargo")
+        .args(["run", "--bin", "rustylife-server"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn server");
+
+    // Wait for the server to start (including both 8080 and 8086)
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Connect to the new Telemetry Dashboard service on port 8086
+    let url = Url::parse("ws://127.0.0.1:8086/ws").unwrap();
+
+    let connect_result = connect_async(url.as_str()).await;
+
+    // We expect the connection to succeed if the service is implemented
+    assert!(
+        connect_result.is_ok(),
+        "Failed to connect to Telemetry service on port 8086. Is it implemented?"
+    );
+
+    let (ws_stream, _) = connect_result.unwrap();
+    let (mut write, mut read) = ws_stream.split();
+
+    let mut found_welcome = false;
+    let _timeout = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(msg) = read.next().await {
+            let msg = msg.expect("Error reading message");
+            if let Message::Binary(data) = msg {
+                if let Ok((Response::Welcome { .. }, _)) = Response::from_bytes(&data) {
+                    found_welcome = true;
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(
+        found_welcome,
+        "Expected Welcome response from Telemetry service"
+    );
+
+    // Send HandshakeMetricsOnly
+    let handshake_req = Request::HandshakeMetricsOnly;
+    write
+        .send(Message::Binary(encode_request(&handshake_req).into()))
+        .await
+        .expect("Failed to send HandshakeMetricsOnly");
+
+    let timeout = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(msg) = read.next().await {
+            let msg = msg.expect("Error reading message");
+            if let Message::Binary(data) = msg {
+                if let Ok((response, _)) = Response::from_bytes(&data) {
+                    match response {
+                        Response::SnapshotAvailable { telemetry, .. } => {
+                            println!(
+                                "Received SnapshotAvailable for Gen {} via Telemetry service",
+                                telemetry.generation
+                            );
+                            return; // Success!
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    })
+    .await;
+
+    let _ = server_process.kill();
+    let _ = server_process.wait();
+
+    if timeout.is_err() {
+        panic!("Timed out waiting for SnapshotAvailable via Telemetry service");
+    }
+}

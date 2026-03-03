@@ -83,7 +83,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
     <div class="controls">
         <h3>Mock Server Controls</h3>
-        <button onclick="startMockServer()">Start Mock Server</button>
+        <button onclick="startMockServer('./index.html')">Start Mock Server (Main GUI)</button>
+        <button onclick="startMockServer('./telemetry.html')">Start Mock Server (Telemetry)</button>
         <button onclick="stopMockServer()">Stop Mock Server</button>
         <br>
         <button onclick="sendWelcome()">Send Welcome</button>
@@ -112,19 +113,23 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             logDiv.scrollTop = logDiv.scrollHeight;
         };
 
-        window.startMockServer = async function () {
-            log('Starting mock WebSocket server on port 8081...', 'send');
+        window.startMockServer = async function (targetHtml = './index.html') {
+            log(`Starting mock WebSocket server for ${targetHtml}...`, 'send');
 
-            // Use fetch to grab index.html so we can inject MockWebSocket BEFORE its scripts run
-            fetch('./index.html').then(r => r.text()).then(indexHtml => {
+            // Clear any existing iframes
+            const existingIframes = document.querySelectorAll('iframe');
+            existingIframes.forEach(iframe => iframe.remove());
+
+            // Use fetch to grab the target html so we can inject MockWebSocket BEFORE its scripts run
+            fetch(targetHtml).then(r => r.text()).then(indexHtml => {
                 const iframe = document.createElement('iframe');
                 iframe.style.width = '1000px';
                 iframe.style.height = '800px';
                 iframe.style.border = '2px solid #00ff00';
-                
+
                 // Add base href so relative paths like dashboard.js work
                 let injectedHtml = indexHtml.replace('<head>', '<head>\n<base href="' + window.location.href + '">');
-                
+
                 // Define the mock WebSocket class
                 const mockScript = `
                 <script>
@@ -157,19 +162,33 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                                 window.parent.log(\`  Request: \${JSON.stringify(request)}\`, 'send');
 
                                 if (request.type === "HandshakeFullSnapshot") {
+                                    window.parent.simClientType = "FullSnapshot";
                                     setTimeout(() => {
                                         window.parent.sendBinaryState(window.parent.simGen || 0, 10);
+                                    }, 1);
+                                } else if (request.type === "HandshakeMetricsOnly") {
+                                    window.parent.simClientType = "MetricsOnly";
+                                    setTimeout(() => {
+                                        window.parent.sendSnapshotAvailable(window.parent.simGen || 0, 10);
                                     }, 1);
                                 } else if (request.type === "AckPreviousFrame") {
                                     if (window.parent.simIsRunning) {
                                         setTimeout(() => {
                                             window.parent.simGen = (window.parent.simGen || 0) + 1;
-                                            window.parent.sendBinaryState(window.parent.simGen, 10);
+                                            if (window.parent.simClientType === "MetricsOnly") {
+                                                window.parent.sendSnapshotAvailable(window.parent.simGen, 10);
+                                            } else {
+                                                window.parent.sendBinaryState(window.parent.simGen, 10);
+                                            }
                                         }, 16);
                                     }
                                 } else if (request.type === "UpdateViewport") {
                                     setTimeout(() => {
-                                        window.parent.sendBinaryState(window.parent.simGen || 0, 10);
+                                        if (window.parent.simClientType === "MetricsOnly") {
+                                            window.parent.sendSnapshotAvailable(window.parent.simGen || 0, 10);
+                                        } else {
+                                            window.parent.sendBinaryState(window.parent.simGen || 0, 10);
+                                        }
                                     }, 1);
                                 }
                             } catch (e) {
@@ -190,16 +209,23 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                     window.WebSocket = window.MockWebSocketClass;
                     window.parent.log('Mock WebSocket injected successfully', 'recv');
                 <\/script>`;
-                
+
                 // Inject the mock script right before </body> or inside <head>
                 injectedHtml = injectedHtml.replace('<head>', '<head>' + mockScript);
-                
+
                 iframe.srcdoc = injectedHtml;
                 document.body.appendChild(iframe);
+
+                // Add a small delay for the iframe to mount before slamming the socket with a Welcome
+                setTimeout(() => {
+                    if (window.simulatePatternLoad) {
+                        window.simulatePatternLoad();
+                    }
+                }, 500);
             });
         };
 
-        
+
         window.stopMockServer = function () {
             if (window.mockWs) {
                 window.mockWs.close();
@@ -251,6 +277,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 payload: {
                     generation: generation,
                     telemetry: {
+                        timestamp: Date.now(),
                         population: population,
                         is_running: true,
                         gps: 1000.0,
@@ -367,28 +394,26 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             window.simIsRunning = true;
             setTimeout(() => {
                 window.simGen = (window.simGen || 0) + 1;
-                window.sendBinaryState(window.simGen, 10);
+                if (window.simClientType === "MetricsOnly") {
+                    window.sendSnapshotAvailable(window.simGen, 10);
+                } else {
+                    window.sendBinaryState(window.simGen, 10);
+                }
             }, 10);
         };
-        
+
         window.simulateStop = function () {
             log('=== Simulating Stop Engine ===', 'send');
             window.simIsRunning = false;
-            window.sendBinaryState(window.simGen || 0, 10);
+            if (window.simClientType === "MetricsOnly") {
+                window.sendSnapshotAvailable(window.simGen || 0, 10);
+            } else {
+                window.sendBinaryState(window.simGen || 0, 10);
+            }
         };
 
-        // Auto-start for user convenience
-        window.addEventListener('load', () => {
-            if (window.startMockServer) {
-                window.startMockServer();
-            }
-            // Add a small delay for the iframe to mount before slamming the socket
-            setTimeout(() => {
-                if (window.simulatePatternLoad) {
-                    window.simulatePatternLoad();
-                }
-            }, 500);
-        });
+        // Auto-start disabled to prevent state corruption when switching between GUI and Telemetry testing
+        // Users must click "Start Mock Server..." to begin.
     </script>
 </body>
 

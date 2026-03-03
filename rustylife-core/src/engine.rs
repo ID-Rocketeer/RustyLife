@@ -151,6 +151,7 @@ impl Telemetry {
             self.gps = 0.0;
             self.work_rate_ema = 0.0;
             self.net_rate_ema = 0.0;
+            self.last_generation = 0; // MUST reset this or future runs are ignored until caught up!
             self.last_tick = now;
             return;
         }
@@ -158,8 +159,8 @@ impl Telemetry {
         let delta = now.duration_since(self.last_tick).as_secs_f64();
 
         if delta > 0.0 && generation > self.last_generation {
+            let cycles = (generation - self.last_generation) as f64;
             self.last_generation = generation;
-            let cycles = 1.0;
             let instantaneous_gps = cycles / delta;
 
             // EMA for GPS

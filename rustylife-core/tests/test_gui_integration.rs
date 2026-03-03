@@ -15,7 +15,7 @@
 
 use rustylife_core::engine::SimulationEngine;
 use rustylife_core::space::SimulationSpace;
-use rustylife_core::{BUCKET_COUNT, Request, Response};
+use rustylife_core::{BUCKET_COUNT, Request};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -23,7 +23,7 @@ use tokio::net::TcpStream;
 
 // Simulates the Server-Side IPC Handler logic (simplified)
 async fn mock_server_ipc(stream: TcpStream, engine: Arc<SimulationEngine>) {
-    let (reader, mut writer) = stream.into_split();
+    let (reader, _writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
     loop {
@@ -50,22 +50,6 @@ async fn mock_server_ipc(stream: TcpStream, engine: Arc<SimulationEngine>) {
                 Request::Stop => engine.stop(),
                 Request::NextStep => engine.step(),
                 Request::Reset => engine.reset(),
-                Request::GetState { generation, .. } => {
-                    // Ack with SnapshotAvailable for test
-                    let resp = Response::SnapshotAvailable {
-                        telemetry: rustylife_core::Telemetry {
-                            generation: generation,
-                            timestamp: 0,
-                            population: 0,
-                            is_running: true,
-                            gps: 0.0,
-                            work_rate: 0.0,
-                            net_rate: 0.0,
-                            bounds: None,
-                        },
-                    };
-                    let _ = writer.write_all(&resp.to_bytes()).await;
-                }
                 _ => {}
             }
         }

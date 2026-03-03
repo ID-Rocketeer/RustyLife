@@ -53,10 +53,7 @@ pub struct PatternInfo {
 pub enum Request {
     NextStep,
     Reset,
-    GetState {
-        generation: u64,
-        viewport: Option<((i128, i128), (i128, i128))>,
-    },
+
     Start,
     Stop,
     Seed(String),

@@ -617,6 +617,21 @@ fn main() {
             .route("/ws", get(ws_handler))
             .with_state(shared_state_clone.clone());
 
+        // Telemetry Server for Realtime Graphing (Port 8086)
+        let telemetry_state = shared_state_clone.clone();
+        tokio::spawn(async move {
+            let telemetry_app = Router::new()
+                .route("/", get(telemetry_html))
+                .route("/telemetry.js", get(telemetry_js))
+                .route("/protocol.js", get(protocol_js))
+                .route("/ws", get(ws_handler))
+                .with_state(telemetry_state);
+
+            let listener = tokio::net::TcpListener::bind("0.0.0.0:8086").await.unwrap();
+            println!("Telemetry Server running on http://localhost:8086");
+            axum::serve(listener, telemetry_app).await.unwrap();
+        });
+
         // IPC/TCP Server for Native Clients
         let ipc_state = shared_state_clone.clone();
         tokio::spawn(async move {
@@ -793,6 +808,17 @@ async fn utils_js() -> impl IntoResponse {
     )
 }
 
+async fn telemetry_html() -> impl IntoResponse {
+    axum::response::Html(include_str!("../static/telemetry.html"))
+}
+
+async fn telemetry_js() -> impl IntoResponse {
+    axum::response::Response::builder()
+        .header("Content-Type", "application/javascript")
+        .body(include_str!("../static/telemetry.js").to_owned())
+        .unwrap()
+}
+
 async fn protocol_js() -> impl IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "application/javascript")],
@@ -878,9 +904,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                             Request::Reset => {
                                 state.engine.reset();
                             }
-                            Request::GetState { .. } => {
-                                // Ignored in push architecture
-                            }
+
                             Request::Start => {
                                 state.engine.start();
                             }
@@ -1045,9 +1069,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                         }
                         Request::NextStep => { state.engine.step(); }
                         Request::Reset => { state.engine.reset(); }
-                        Request::GetState { .. } => {
-                            // Ignored
-                        }
+
                         Request::Start => {
                             println!("IPC: Received Start Request");
                             state.engine.start();

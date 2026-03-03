@@ -1,0 +1,108 @@
+<!--
+Copyright (C) 2026 Steven P. Collins. All rights reserved.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+-->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustyLife Telemetry</title>
+    <style>
+        body {
+            background-color: #000000;
+            color: #f9fafb;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+            box-sizing: border-box;
+            gap: 1rem;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin: 0;
+            text-align: center;
+            background: linear-gradient(to right, #3b82f6, #10b981);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .connection-status {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 0.875rem;
+            color: #9ca3af;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            margin-right: 0.5rem;
+        }
+
+        .dot.connected {
+            background: #10b981;
+            box-shadow: 0 0 5px #10b981;
+        }
+
+        .chart-box {
+            flex: 1;
+            background: #111827;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.5rem;
+            overflow: hidden;
+            width: 100%;
+        }
+    </style>
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <div style="display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;">
+            <h1 style="text-align: left; margin: 0;">RustyLife Telemetry Dashboard</h1>
+            <div id="chart-gps" style="width: 150px; height: 150px; justify-self: center;"></div>
+            <div class="connection-status" style="justify-self: end; min-width: 200px; justify-content: flex-end;">
+                <span id="status-dot" class="dot"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </div>
+
+        <div id="chart-population" class="chart-box"></div>
+    </div>
+    <script type="module" src="telemetry.js"></script>
+</body>
+
+</html>

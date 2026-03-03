@@ -154,3 +154,90 @@ fn test_telemetry_gps_anomaly_during_prune() {
         work_rate
     );
 }
+
+struct GpsSubscriber {
+    pub packets: Mutex<Vec<(u64, f64, f64)>>, // (generation, gps, work_rate)
+}
+
+impl EngineSubscriber for GpsSubscriber {
+    fn on_snapshot_available(
+        &self,
+        _data: Arc<Vec<((i128, i128), u8)>>,
+        telemetry: rustylife_core::Telemetry,
+    ) -> bool {
+        self.packets.lock().unwrap().push((
+            telemetry.generation,
+            telemetry.gps,
+            telemetry.work_rate,
+        ));
+        true
+    }
+}
+
+#[test]
+fn test_telemetry_resumes_after_pattern_load() {
+    let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+    let engine = SimulationEngine::new(space, 4);
+
+    let subscriber = Arc::new(GpsSubscriber {
+        packets: Mutex::new(Vec::new()),
+    });
+    engine.add_subscriber(subscriber.clone());
+
+    engine.register_pattern(rustylife_core::PatternInfo {
+        name: "blinker".to_string(),
+        description: "Blinker".to_string(),
+        rle: "x = 3, y = 3\n3o!".to_string(),
+    });
+
+    // 1. Run engine past Gen 0
+    engine.seed("blinker".to_string());
+    wait_for_idle(&engine);
+    std::thread::sleep(Duration::from_millis(15));
+
+    // Step a few times to advance generation and record data
+    for _ in 0..5 {
+        engine.step();
+        wait_for_idle(&engine);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Capture telemetry from run 1
+    let gen1_last;
+    {
+        let packets = subscriber.packets.lock().unwrap();
+        gen1_last = packets.last().unwrap().0;
+    }
+    assert!(gen1_last >= 5, "Engine did not reach expected generation");
+
+    // 2. Load new pattern (resets generation to 0)
+    engine.seed("blinker".to_string());
+    wait_for_idle(&engine);
+
+    // Clear packets so we only see the new run
+    subscriber.packets.lock().unwrap().clear();
+
+    // 3. Step to Gen 1
+    engine.step();
+    wait_for_idle(&engine);
+
+    // 4. Step again a few times to compute moving averages and ensure EMA records
+    for _ in 0..3 {
+        engine.step();
+        wait_for_idle(&engine);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Give subscriber time to process IO
+    std::thread::sleep(Duration::from_millis(50));
+
+    let packets = subscriber.packets.lock().unwrap();
+    // Prove that the EMA is unlocked and > 0.0 for the second run!
+    let has_gps = packets
+        .iter()
+        .any(|(g, gps, work_rate)| *g > 0 && *gps > 0.0 && *work_rate > 0.0);
+    assert!(
+        has_gps,
+        "GPS/Work metrics did not update after loading a new pattern because last_generation wasn't reset!"
+    );
+}
