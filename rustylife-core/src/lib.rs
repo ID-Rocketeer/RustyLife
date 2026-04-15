@@ -103,6 +103,10 @@ pub enum Response {
     SnapshotAvailable {
         telemetry: Telemetry,
     },
+    /// A bundled array of telemetry frames, used to provide a lossless history for MetricsOnly clients.
+    TelemetryBundle {
+        telemetry: Vec<Telemetry>,
+    },
     /// A generic error message.
     Error(String),
     /// Initial handshake with server capabilities.

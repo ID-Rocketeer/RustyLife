@@ -1035,6 +1035,32 @@ impl Engine {
         }
     }
 
+    pub fn capture_metrics_only(&self) -> crate::Telemetry {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let living_count = self.living_count.load(Ordering::SeqCst) as usize;
+
+        let (gps, work_rate, net_rate) = {
+            let t = self.telemetry.lock().unwrap();
+            (t.gps, t.work_rate_ema, t.net_rate_ema)
+        };
+        let bounds = *self.current_generation_bounds.lock().unwrap();
+        let is_running = !self.stopping.load(Ordering::SeqCst);
+
+        crate::Telemetry {
+            generation,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64,
+            population: living_count as u64,
+            is_running,
+            gps,
+            work_rate,
+            net_rate,
+            bounds: crate::Telemetry::to_cartesian_bounds(bounds),
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn capture_current_state(&self) -> (Vec<((i128, i128), u8)>, crate::Telemetry) {
         let generation = self.generation.load(Ordering::SeqCst);

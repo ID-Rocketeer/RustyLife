@@ -135,6 +135,9 @@ async fn main() -> anyhow::Result<()> {
                                     rustylife_core::Response::SnapshotAvailable { .. } => {
                                         // Ignored in push architecture
                                     }
+                                    rustylife_core::Response::TelemetryBundle { .. } => {
+                                        // Ignored by IPC client because it expects FullSnapshot with BinaryPayload
+                                    }
                                     rustylife_core::Response::BinaryStateHeader { record_count, .. } => {
                                         // Binary Payload follows
                                         let payload_size = (record_count as usize * 33) + 4; // Cells + CRC

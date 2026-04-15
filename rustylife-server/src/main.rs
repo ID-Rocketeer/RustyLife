@@ -750,8 +750,10 @@ fn make_current_state_payload(
 ) -> Option<Vec<u8>> {
     match client_type {
         Some(ClientType::MetricsOnly) => {
-            let (_, telemetry) = engine.capture_current_state();
-            let resp = Response::SnapshotAvailable { telemetry };
+            let telemetry = engine.capture_metrics_only();
+            let resp = Response::TelemetryBundle {
+                telemetry: vec![telemetry],
+            };
             Some(resp.to_bytes())
         }
         Some(ClientType::FullSnapshot { viewport }) => {
@@ -841,6 +843,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
     let mut client_type: Option<ClientType> = None;
     let mut last_sent_generation = 0;
 
+    let mut metrics_buffer: Vec<rustylife_core::Telemetry> = Vec::new();
+
     // Send Welcome message
     let welcome = Response::Welcome {
         cores: state.cores,
@@ -851,7 +855,13 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
     loop {
         tokio::select! {
             result = socket.recv() => {
-                if let Some(Ok(Message::Binary(bin))) = result {
+                let bin = match result {
+                    Some(Ok(Message::Binary(bin))) => Some(bin),
+                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) | Some(Ok(Message::Text(_))) => None,
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                };
+
+                if let Some(bin) = bin {
                     // Try parsing as Hybrid (Prefix) first, then fallback to Raw JSON
                     let req = Request::from_bytes(&bin).ok()
                         .or_else(|| serde_json::from_slice::<Request>(&bin).ok());
@@ -875,17 +885,32 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 is_ready_for_next_frame = false;
                             }
                             Request::AckPreviousFrame => {
-                                let engine_gen = state.engine.generation();
-                                if engine_gen > last_sent_generation {
-                                    if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
-                                        let _ = socket.send(Message::Binary(payload)).await;
-                                        last_sent_generation = engine_gen;
-                                        is_ready_for_next_frame = false;
-                                    } else {
-                                        is_ready_for_next_frame = true;
+                                match &client_type {
+                                    Some(ClientType::MetricsOnly) => {
+                                        if !metrics_buffer.is_empty() {
+                                            let last_gen = metrics_buffer.last().unwrap().generation;
+                                            let resp = Response::TelemetryBundle { telemetry: std::mem::take(&mut metrics_buffer) };
+                                            let _ = socket.send(Message::Binary(resp.to_bytes())).await;
+                                            last_sent_generation = last_gen;
+                                            is_ready_for_next_frame = false;
+                                        } else {
+                                            is_ready_for_next_frame = true;
+                                        }
                                     }
-                                } else {
-                                    is_ready_for_next_frame = true;
+                                    _ => {
+                                        let engine_gen = state.engine.generation();
+                                        if engine_gen > last_sent_generation {
+                                            if let Some(payload) = make_current_state_payload(&state.engine, &client_type) {
+                                                let _ = socket.send(Message::Binary(payload)).await;
+                                                last_sent_generation = engine_gen;
+                                                is_ready_for_next_frame = false;
+                                            } else {
+                                                is_ready_for_next_frame = true;
+                                            }
+                                        } else {
+                                            is_ready_for_next_frame = true;
+                                        }
+                                    }
                                 }
                             }
                             Request::UpdateViewport { viewport } => {
@@ -937,46 +962,59 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                             println!("WS: Failed to parse request (len={}): {:?}", bin.len(), bin);
                         }
                     }
-                } else {
-                    break;
                 }
             }
             _ = shutdown_rx.recv() => {
                 break;
             }
             result = rx.recv() => {
-                #[allow(clippy::collapsible_if)]
-                if let Ok((data, telemetry)) = result {
-                    if is_ready_for_next_frame {
-                        match client_type {
-                            Some(ClientType::MetricsOnly) => {
-                                let resp = Response::SnapshotAvailable { telemetry };
-                                if socket.send(Message::Binary(resp.to_bytes())).await.is_err() {
-                                    break;
-                                }
-                                last_sent_generation = telemetry.generation;
-                                is_ready_for_next_frame = false;
-                            }
-                            Some(ClientType::FullSnapshot { viewport }) => {
-                                let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                                    data.iter()
-                                        .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
-                                        .copied()
-                                        .collect()
-                                } else {
-                                    // if no viewport specified, send all cells
-                                    data.iter().copied().collect()
-                                };
-
-                                let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
-                                if socket.send(Message::Binary(payload)).await.is_err() {
-                                    break;
-                                }
-                                last_sent_generation = telemetry.generation;
-                                is_ready_for_next_frame = false;
-                            }
-                            None => {}
+                match result {
+                    Ok((data, telemetry)) => {
+                        if let Some(ClientType::MetricsOnly) = client_type {
+                            metrics_buffer.push(telemetry);
                         }
+
+                        // Client requested a frame and engine provided a new snapshot
+                        if is_ready_for_next_frame {
+                            match client_type {
+                                Some(ClientType::MetricsOnly) => {
+                                    let last_gen = metrics_buffer.last().unwrap().generation;
+                                    let resp = Response::TelemetryBundle { telemetry: std::mem::take(&mut metrics_buffer) };
+                                    if socket.send(Message::Binary(resp.to_bytes())).await.is_err() {
+                                        break;
+                                    }
+                                    last_sent_generation = last_gen;
+                                    is_ready_for_next_frame = false;
+                                }
+                                Some(ClientType::FullSnapshot { viewport }) => {
+                                    let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                                        data.iter()
+                                            .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                                            .copied()
+                                            .collect()
+                                    } else {
+                                        data.iter().copied().collect()
+                                    };
+
+                                    let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
+                                    if socket.send(Message::Binary(payload)).await.is_err() {
+                                        break;
+                                    }
+                                    last_sent_generation = telemetry.generation;
+                                    is_ready_for_next_frame = false;
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // The engine is producing frames faster than this client can pull them
+                        // from the broadcast channel. We just skip this warning and the next
+                        // loop iteration will pull the very latest frame.
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
                     }
                 }
             }
@@ -1092,39 +1130,42 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                 break;
             }
             result = rx.recv() => {
-                #[allow(clippy::collapsible_if)]
-                if let Ok((data, telemetry)) = result {
-                    if is_ready_for_next_frame {
-                        match client_type {
-                            Some(ClientType::MetricsOnly) => {
-                                let resp = Response::SnapshotAvailable { telemetry };
-                                let bytes = resp.to_bytes();
-                                if writer.write_all(&bytes).await.is_err() {
-                                    break;
+                match result {
+                    Ok((data, telemetry)) => {
+                        if is_ready_for_next_frame {
+                            match client_type {
+                                Some(ClientType::MetricsOnly) => {
+                                    let resp = Response::SnapshotAvailable { telemetry };
+                                    let bytes = resp.to_bytes();
+                                    if writer.write_all(&bytes).await.is_err() {
+                                        break;
+                                    }
+                                    last_sent_generation = telemetry.generation;
+                                    is_ready_for_next_frame = false;
                                 }
-                                last_sent_generation = telemetry.generation;
-                                is_ready_for_next_frame = false;
-                            }
-                            Some(ClientType::FullSnapshot { viewport }) => {
-                                let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                                    data.iter()
-                                        .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
-                                        .copied()
-                                        .collect()
-                                } else {
-                                    data.iter().copied().collect()
-                                };
+                                Some(ClientType::FullSnapshot { viewport }) => {
+                                    let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                                        data.iter()
+                                            .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                                            .copied()
+                                            .collect()
+                                    } else {
+                                        data.iter().copied().collect()
+                                    };
 
-                                let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
-                                if writer.write_all(&payload).await.is_err() {
-                                    break;
+                                    let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
+                                    if writer.write_all(&payload).await.is_err() {
+                                        break;
+                                    }
+                                    last_sent_generation = telemetry.generation;
+                                    is_ready_for_next_frame = false;
                                 }
-                                last_sent_generation = telemetry.generation;
-                                is_ready_for_next_frame = false;
+                                None => {}
                             }
-                            None => {}
                         }
                     }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
@@ -1320,5 +1361,59 @@ mod crash_telemetry_tests {
             args_result.err()
         );
         assert_eq!(args_result.unwrap().log_interval, 1.5);
+    }
+
+    #[test]
+    fn test_make_current_state_payload_metrics_only_performance() {
+        use rustylife_core::engine::SimulationEngine;
+        use rustylife_core::space::SimulationSpace;
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        // Create a massive simulation space
+        let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+        let engine = SimulationEngine::new(space.clone(), 4);
+
+        // Seed massive block of 250,000 cells directly
+        for i in 0..500 {
+            for j in 0..500 {
+                engine.place_cell(i * 10, j * 10);
+            }
+        }
+
+        // Wait for workers to place the cells
+        while engine.work_queue_in_flight() > 0 {
+            std::thread::yield_now();
+        }
+
+        // Step once to capture generation 1 and telemetry
+        engine.step();
+        while engine.work_queue_in_flight() > 0
+            || engine
+                .phase_counter
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+        {
+            std::thread::yield_now();
+        }
+        // Force sync engine stopping flag since it might be marked for stop
+        engine.wait_for_quiescence(std::time::Duration::from_millis(50));
+
+        let client_type = Some(crate::ClientType::MetricsOnly);
+
+        // Measure execution time
+        let start = Instant::now();
+        let payload = crate::make_current_state_payload(&engine, &client_type);
+        let elapsed = start.elapsed();
+
+        assert!(payload.is_some());
+
+        // In O(1), this is ~0ms.
+        // In O(N) traversing 250k cells, this takes >> 5ms on modern CPUs.
+        assert!(
+            elapsed.as_millis() < 5,
+            "make_current_state_payload for MetricsOnly took {}ms! This indicates an O(N) traversal bug dropping telemetry frames.",
+            elapsed.as_millis()
+        );
     }
 }

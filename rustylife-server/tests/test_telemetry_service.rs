@@ -91,10 +91,10 @@ async fn test_telemetry_service() {
             if let Message::Binary(data) = msg {
                 if let Ok((response, _)) = Response::from_bytes(&data) {
                     match response {
-                        Response::SnapshotAvailable { telemetry, .. } => {
+                        Response::TelemetryBundle { telemetry } => {
                             println!(
-                                "Received SnapshotAvailable for Gen {} via Telemetry service",
-                                telemetry.generation
+                                "Received TelemetryBundle with {} frames via Telemetry service",
+                                telemetry.len()
                             );
                             return; // Success!
                         }
@@ -110,6 +110,6 @@ async fn test_telemetry_service() {
     let _ = server_process.wait();
 
     if timeout.is_err() {
-        panic!("Timed out waiting for SnapshotAvailable via Telemetry service");
+        panic!("Timed out waiting for TelemetryBundle via Telemetry service");
     }
 }
