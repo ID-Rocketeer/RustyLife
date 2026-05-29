@@ -137,6 +137,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             background: #2563eb;
         }
 
+        button.selected {
+            background: var(--primary);
+        }
+
+        button.selected:hover:not(:disabled) {
+            background: #2563eb;
+        }
+
         button.danger {
             background: #991b1b;
         }
@@ -286,6 +294,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <select id="pattern-select">
                     <option value="" disabled selected>Select Pattern...</option>
                 </select>
+                <button id="color-mode-btn" title="Toggle between 4-Color and B&W modes">Classic</button>
                 <button id="zoom-in-btn">In</button>
                 <button id="zoom-out-btn">Out</button>
             </div>

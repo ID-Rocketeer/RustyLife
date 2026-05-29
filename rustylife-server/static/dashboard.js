@@ -26,6 +26,7 @@ const quitBtn = /** @type {HTMLButtonElement} */ (document.getElementById('quit-
 const patternSelect = /** @type {HTMLSelectElement} */ (document.getElementById('pattern-select'));
 const zoomInBtn = /** @type {HTMLButtonElement} */ (document.getElementById('zoom-in-btn'));
 const zoomOutBtn = /** @type {HTMLButtonElement} */ (document.getElementById('zoom-out-btn'));
+const colorModeBtn = /** @type {HTMLButtonElement} */ (document.getElementById('color-mode-btn'));
 
 const extentEl = /** @type {HTMLSpanElement} */ (document.getElementById('extent-display'));
 const centerEl = /** @type {HTMLSpanElement} */ (document.getElementById('center-display'));
@@ -62,6 +63,7 @@ let lastMouseX = 0;
 let lastMouseY = 0;
 
 let latestTelemetry = null;
+let isClassicMode = false;
 
 function uiLoop() {
     if (latestTelemetry) {
@@ -200,11 +202,25 @@ function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
         recordsOffset += 33;
 
         let color;
-        switch (state) {
-            case 0b11: color = '#3b82f6'; break;
-            case 0b10: color = '#10b981'; break;
-            case 0b01: color = '#ef4444'; break;
-            default: continue;
+        if (isClassicMode) {
+            switch (state) {
+                case 0b11:
+                case 0b10:
+                    color = '#ffffff';
+                    break;
+                case 0b01:
+                    color = '#000000';
+                    break;
+                default:
+                    continue;
+            }
+        } else {
+            switch (state) {
+                case 0b11: color = '#3b82f6'; break;
+                case 0b10: color = '#10b981'; break;
+                case 0b01: color = '#ef4444'; break;
+                default: continue;
+            }
         }
 
         ctx.fillStyle = color;
@@ -448,6 +464,18 @@ function updateZoom(delta, mouseX = null, mouseY = null) {
 
 zoomInBtn.onclick = () => updateZoom(1);
 zoomOutBtn.onclick = () => updateZoom(-1);
+
+colorModeBtn.onclick = () => {
+    isClassicMode = !isClassicMode;
+    if (isClassicMode) {
+        colorModeBtn.classList.add('selected');
+    } else {
+        colorModeBtn.classList.remove('selected');
+    }
+    if (lastState) {
+        renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
+    }
+};
 
 window.addEventListener('keydown', (e) => {
     if (e.key === '+' || e.key === '=') updateZoom(1);

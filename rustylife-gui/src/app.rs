@@ -37,6 +37,9 @@ pub struct RustyLifeApp {
 
     // Styling
     first_frame: bool,
+
+    // Classic (Black & White) presentation mode
+    pub(crate) classic_mode: bool,
 }
 
 impl RustyLifeApp {
@@ -55,6 +58,7 @@ impl RustyLifeApp {
             last_update_time: None,
             shutdown_rx,
             first_frame: true,
+            classic_mode: false,
         }
     }
 }
@@ -276,6 +280,20 @@ impl eframe::App for RustyLifeApp {
                                     "Load a pattern"
                                 });
                             });
+
+                            let classic_btn = egui::Button::new(
+                                egui::RichText::new("Classic").size(15.0).strong(),
+                            )
+                            .min_size(Vec2::new(0.0, btn_h))
+                            .selected(self.classic_mode);
+
+                            if ui
+                                .add_sized([64.0, btn_h], classic_btn)
+                                .on_hover_text("Toggle classic black & white cell presentation")
+                                .clicked()
+                            {
+                                self.classic_mode = !self.classic_mode;
+                            }
 
                             if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
                                 self.projection.zoom_at_center(1.0);
@@ -640,11 +658,19 @@ impl eframe::App for RustyLifeApp {
                     }
 
                     for ((x, y), state) in cells {
-                        let color = match state {
-                            0b11 => egui::Color32::from_rgb(59, 130, 246), // Alive (Blue)
-                            0b10 => egui::Color32::from_rgb(16, 185, 129), // Born (Green)
-                            0b01 => egui::Color32::from_rgb(239, 68, 68),  // Dying (Red)
-                            _ => continue,
+                        let color = if self.classic_mode {
+                            match state {
+                                0b11 | 0b10 => egui::Color32::WHITE,
+                                0b01 => egui::Color32::BLACK,
+                                _ => continue,
+                            }
+                        } else {
+                            match state {
+                                0b11 => egui::Color32::from_rgb(59, 130, 246), // Alive (Blue)
+                                0b10 => egui::Color32::from_rgb(16, 185, 129), // Born (Green)
+                                0b01 => egui::Color32::from_rgb(239, 68, 68),  // Dying (Red)
+                                _ => continue,
+                            }
                         };
 
                         let screen_pos = self.projection.world_to_screen(x, y, rect);
@@ -862,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn test_viewport_persistence_bug() {
+    fn test_viewport_offset_persists_across_reset() {
         let state = Arc::new(Mutex::new(AppState::default()));
         let mut app = RustyLifeApp::new(state.clone(), Box::new(MockHandler), None);
 

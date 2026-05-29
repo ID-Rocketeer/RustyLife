@@ -26,6 +26,7 @@ describe('Dashboard Panning & Zooming', () => {
             <button id="reset-btn"></button><button id="origin-btn"></button>
             <button id="quit-btn"></button><select id="pattern-select"></select>
             <button id="zoom-in-btn"></button><button id="zoom-out-btn"></button>
+            <button id="color-mode-btn"></button>
             <div id="extent-display"></div><div id="center-display"></div>
             <div id="bounds-display"></div><div id="expanse-display"></div>
             <div id="zoom-display"></div><div id="work-display"></div>
@@ -133,5 +134,52 @@ describe('Dashboard Panning & Zooming', () => {
 
         // 4. Verify center is preserved (THIS SHOULD FAIL)
         expect(centerEl.innerHTML).toBe(pannedCenter);
+    });
+
+    it('should toggle classic B&W mode and change cell fill colors', async () => {
+        await import('../static/dashboard.js');
+        await new Promise(r => setTimeout(r, 10));
+
+        const colorModeBtn = document.getElementById('color-mode-btn');
+        expect(colorModeBtn.classList.contains('selected')).toBe(false);
+
+        // Define a state helper with 1 cell: Born (0b10) at coordinate (10, 10)
+        const makeStatePacket = (cellState) => {
+            const metaStr = JSON.stringify({
+                type: "BinaryStateHeader",
+                payload: { record_count: 1, telemetry: { generation: 1, is_running: false, population: 1 } }
+            });
+            const metaBytes = new TextEncoder().encode(metaStr);
+            const buffer = new ArrayBuffer(4 + metaBytes.length + 33);
+            const dv = new DataView(buffer);
+            const u8 = new Uint8Array(buffer);
+
+            dv.setUint32(0, metaBytes.length, true);
+            u8.set(metaBytes, 4);
+            const cellOffset = 4 + metaBytes.length;
+            dv.setBigInt64(cellOffset, 10n, true);
+            dv.setBigInt64(cellOffset + 16, 10n, true);
+            dv.setUint8(cellOffset + 32, cellState);
+            return buffer;
+        };
+
+        // Render first time in standard mode
+        wsInstance.onmessage({ data: makeStatePacket(0b10) });
+        await new Promise(r => setTimeout(r, 10));
+
+        // In standard mode, 0b10 is Green (#10b981)
+        expect(mockCtx.fillStyle).toBe('#10b981');
+
+        // Toggle B&W mode
+        colorModeBtn.click();
+        expect(colorModeBtn.classList.contains('selected')).toBe(true);
+
+        // Click forces rerender, verify that fillStyle is updated to white (#ffffff)
+        expect(mockCtx.fillStyle).toBe('#ffffff');
+
+        // Toggle back to standard mode
+        colorModeBtn.click();
+        expect(colorModeBtn.classList.contains('selected')).toBe(false);
+        expect(mockCtx.fillStyle).toBe('#10b981');
     });
 });
