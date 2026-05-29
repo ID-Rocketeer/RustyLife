@@ -504,7 +504,7 @@ fn main() {
 
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
     let pool_size = std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(1).max(1)) // Reserve 1 core for the I/O thread
+        .map(|n| n.get())
         .unwrap_or(8);
     println!(
         "Initializing Simulation Engine with {} workers (+1 I/O thread)...",

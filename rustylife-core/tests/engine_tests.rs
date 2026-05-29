@@ -832,7 +832,8 @@ fn test_engine_seed_by_name() {
     for i in 0..4 {
         let engine_clone = std::sync::Arc::clone(&engine);
         std::thread::spawn(move || {
-            rustylife_core::engine::Engine::run_worker(engine_clone, i);
+            let local_queue = crossbeam_deque::Worker::new_fifo();
+            rustylife_core::engine::Engine::run_worker(engine_clone, i, local_queue);
         });
     }
 

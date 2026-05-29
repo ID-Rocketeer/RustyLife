@@ -20,7 +20,7 @@ use std::thread;
 use std::time::Duration;
 
 #[test]
-fn test_repro_run_stop_reset_hang() {
+fn test_engine_resets_and_resumes_without_hanging_after_run_and_stop() {
     let space = Arc::new(SimulationSpace::new(4));
     let engine = SimulationEngine::new(space.clone(), 2);
 

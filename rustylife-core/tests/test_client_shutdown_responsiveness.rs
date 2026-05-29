@@ -36,7 +36,7 @@ impl EngineSubscriber for MockClient {
 }
 
 #[test]
-fn test_repro_client_deadlock() {
+fn test_simulation_resumes_after_stop_and_reset() {
     let space = Arc::new(SimulationSpace::new(4));
     let engine = SimulationEngine::new(space.clone(), 2);
     let client = Arc::new(MockClient {

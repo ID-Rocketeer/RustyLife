@@ -20,7 +20,7 @@ use std::thread;
 use std::time::Duration;
 
 #[test]
-fn test_repro_run_stop_step_kills_cells() {
+fn test_cells_stay_alive_after_step_following_run_and_stop() {
     let space = Arc::new(SimulationSpace::new(4));
     let engine = SimulationEngine::new(space.clone(), 2);
 

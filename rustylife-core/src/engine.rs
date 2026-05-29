@@ -60,24 +60,38 @@ pub type SimulationEngine = Engine;
 
 pub struct WorkQueue {
     queue: crossbeam_deque::Injector<Tasks>,
-    _stealers: Vec<crossbeam_deque::Stealer<Tasks>>,
+    stealers: Vec<crossbeam_deque::Stealer<Tasks>>,
     in_flight_count: AtomicUsize,
+    pub(crate) cvar: std::sync::Condvar,
+    pub(crate) mutex: std::sync::Mutex<()>,
 }
 
 impl WorkQueue {
-    pub fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> (Self, Vec<crossbeam_deque::Worker<Tasks>>) {
         let queue = crossbeam_deque::Injector::new();
-        let stealers = Vec::with_capacity(size);
-        Self {
-            queue,
-            _stealers: stealers,
-            in_flight_count: AtomicUsize::new(0),
+        let mut stealers = Vec::with_capacity(size);
+        let mut workers = Vec::with_capacity(size);
+        for _ in 0..size {
+            let worker = crossbeam_deque::Worker::new_fifo();
+            stealers.push(worker.stealer());
+            workers.push(worker);
         }
+        (
+            Self {
+                queue,
+                stealers,
+                in_flight_count: AtomicUsize::new(0),
+                cvar: std::sync::Condvar::new(),
+                mutex: std::sync::Mutex::new(()),
+            },
+            workers,
+        )
     }
 
     pub fn enqueue(&self, task: Tasks) {
         self.in_flight_count.fetch_add(1, Ordering::SeqCst);
         self.queue.push(task);
+        self.cvar.notify_all();
     }
 
     pub fn enqueue_batch(&self, tasks: Vec<Tasks>) {
@@ -86,6 +100,7 @@ impl WorkQueue {
         for task in tasks {
             self.queue.push(task);
         }
+        self.cvar.notify_all();
     }
 
     pub fn purge(&self) {
@@ -267,9 +282,11 @@ impl Engine {
         let (io_tx, io_rx) = std::sync::mpsc::sync_channel(2);
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
 
+        let (work_queue, mut workers) = WorkQueue::new(pool_size);
+
         let engine = Arc::new(Self {
             space,
-            work_queue: Arc::new(WorkQueue::new(pool_size)),
+            work_queue: Arc::new(work_queue),
             in_flight_count: AtomicUsize::new(0),
             stop_signal: Arc::new(AtomicBool::new(false)),
             generation: AtomicU64::new(0),
@@ -298,10 +315,11 @@ impl Engine {
 
         for i in 0..pool_size {
             let engine_clone = engine.clone();
+            let local_queue = workers.pop().unwrap();
             std::thread::Builder::new()
                 .name(format!("Worker-{}", i))
                 .spawn(move || {
-                    Self::run_worker(engine_clone, i);
+                    Self::run_worker(engine_clone, i, local_queue);
                 })
                 .expect("Failed to spawn engine worker thread");
         }
@@ -336,10 +354,8 @@ impl Engine {
         if self.stopping.load(Ordering::SeqCst) {
             self.stopping.store(false, Ordering::SeqCst);
             let _ = self.command_tx.send(EngineCommand::Start);
-            // We can't use Arc<Self> here easily, but process_commands takes it.
-            // However, we can use a temporary trick or just let the worker pick it up
-            // since Start initiates background work anyway.
-            // For Start, async is fine.
+            let _guard = self.work_queue.mutex.lock().unwrap();
+            self.work_queue.cvar.notify_all();
         }
     }
     pub fn stop(&self) {
@@ -351,7 +367,8 @@ impl Engine {
         if self.stopping.load(Ordering::SeqCst) {
             self.stopping.store(false, Ordering::SeqCst);
             let _ = self.command_tx.send(EngineCommand::Step);
-            // Step initiates work, workers will pick it up.
+            let _guard = self.work_queue.mutex.lock().unwrap();
+            self.work_queue.cvar.notify_all();
         }
     }
     pub fn reset(&self) {
@@ -359,6 +376,8 @@ impl Engine {
         if self.stopping.load(Ordering::SeqCst) {
             let _ = self.command_tx.send(EngineCommand::Reset);
             self.drain_command_queue_locked();
+            let _guard = self.work_queue.mutex.lock().unwrap();
+            self.work_queue.cvar.notify_all();
         }
     }
     pub fn seed(&self, pattern: String) {
@@ -366,6 +385,8 @@ impl Engine {
         if self.stopping.load(Ordering::SeqCst) {
             let _ = self.command_tx.send(EngineCommand::Seed(pattern));
             self.drain_command_queue_locked();
+            let _guard = self.work_queue.mutex.lock().unwrap();
+            self.work_queue.cvar.notify_all();
         }
     }
     pub fn start_generations(&self, count: u64) {
@@ -373,6 +394,8 @@ impl Engine {
         if self.stopping.load(Ordering::SeqCst) {
             self.stopping.store(false, Ordering::SeqCst);
             let _ = self.command_tx.send(EngineCommand::StartGenerations(count));
+            let _guard = self.work_queue.mutex.lock().unwrap();
+            self.work_queue.cvar.notify_all();
         }
     }
     pub fn seed_and_start(&self, pattern: String, target_gen: Option<u64>) {
@@ -383,6 +406,8 @@ impl Engine {
             let _ = self
                 .command_tx
                 .send(EngineCommand::SeedAndStart(pattern, target));
+            let _guard = self.work_queue.mutex.lock().unwrap();
+            self.work_queue.cvar.notify_all();
         }
     }
 
@@ -442,11 +467,15 @@ impl Engine {
 
     pub fn shutdown(&self) {
         self.stop_signal.store(true, Ordering::SeqCst);
+        let _guard = self.work_queue.mutex.lock().unwrap();
+        self.work_queue.cvar.notify_all();
     }
 
     pub fn abort(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         self.work_queue.purge();
+        let _guard = self.work_queue.mutex.lock().unwrap();
+        self.work_queue.cvar.notify_all();
     }
 
     pub fn mark_tainted(&self) {
@@ -491,11 +520,15 @@ impl Engine {
     }
 
     pub fn run(engine: Arc<Self>) {
-        Self::run_worker(engine, 0);
+        let local_queue = crossbeam_deque::Worker::new_fifo();
+        Self::run_worker(engine, 0, local_queue);
     }
 
-    pub fn run_worker(engine: Arc<Self>, thread_idx: usize) {
-        let local_queue = crossbeam_deque::Worker::new_fifo();
+    pub fn run_worker(
+        engine: Arc<Self>,
+        thread_idx: usize,
+        local_queue: crossbeam_deque::Worker<Tasks>,
+    ) {
         loop {
             let task = local_queue.pop().or_else(|| {
                 std::iter::repeat_with(|| {
@@ -503,6 +536,23 @@ impl Engine {
                         .work_queue
                         .queue
                         .steal_batch_and_pop(&local_queue)
+                        .or_else(|| {
+                            let stealers = &engine.work_queue.stealers;
+                            let num_stealers = stealers.len();
+                            let mut res = crossbeam_deque::Steal::Empty;
+                            // Try stealing from other stealers
+                            for i in 0..num_stealers {
+                                let idx = (thread_idx + 1 + i) % num_stealers;
+                                let s = stealers[idx].steal_batch_and_pop(&local_queue);
+                                if s.is_success() {
+                                    return s;
+                                }
+                                if s.is_retry() {
+                                    res = s;
+                                }
+                            }
+                            res
+                        })
                         .or_else(|| engine.work_queue.queue.steal())
                 })
                 .find(|s| !s.is_retry())
@@ -520,13 +570,22 @@ impl Engine {
                     break;
                 }
 
-                // If no work, check for commands if we are the "designated" worker
-                // or just if there's no tasks in flight anywhere
                 if engine.work_queue_in_flight() == 0 {
                     engine.process_commands();
                 }
 
-                std::thread::yield_now();
+                if engine.work_queue_in_flight() == 0 && !engine.stop_signal.load(Ordering::Relaxed)
+                {
+                    let guard = engine.work_queue.mutex.lock().unwrap();
+                    if engine.work_queue_in_flight() == 0
+                        && engine.command_rx.is_empty()
+                        && !engine.stop_signal.load(Ordering::Relaxed)
+                    {
+                        let _woken_guard = engine.work_queue.cvar.wait(guard).unwrap();
+                    }
+                } else {
+                    std::thread::yield_now();
+                }
             }
         }
     }

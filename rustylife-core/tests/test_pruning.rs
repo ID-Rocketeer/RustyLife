@@ -61,7 +61,8 @@ fn test_block_pruning() {
 
     let engine_clone = engine.clone();
     std::thread::spawn(move || {
-        SimulationEngine::run_worker(engine_clone, 0);
+        let local_queue = crossbeam_deque::Worker::new_fifo();
+        SimulationEngine::run_worker(engine_clone, 0, local_queue);
     });
 
     for _ in 0..60 {
@@ -127,7 +128,8 @@ fn test_pruning_headroom() {
 
     let engine_clone = engine.clone();
     std::thread::spawn(move || {
-        SimulationEngine::run_worker(engine_clone, 0);
+        let local_queue = crossbeam_deque::Worker::new_fifo();
+        SimulationEngine::run_worker(engine_clone, 0, local_queue);
     });
 
     // Run enough steps to create dead blocks but keep some alive
