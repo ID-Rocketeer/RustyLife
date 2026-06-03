@@ -158,9 +158,8 @@ function connect() {
     // Unless we are inside the test harness which sets window.mockWs and operates via 8081 usually,
     // wait, test_harness mocks `WebSocket` globally so the URL doesn't actually matter for the mock.
     // But for production, we want 8086.
-    const host = window.location.hostname || 'localhost';
-    const port = '8086'; // Telemetry dedicated port
-    socket = new WebSocket(`${protocol}//${host}:${port}/ws`);
+    const host = window.location.host || 'localhost:8086';
+    socket = new WebSocket(`${protocol}//${host}/ws`);
     socket.binaryType = 'arraybuffer';
 
     socket.onopen = () => {

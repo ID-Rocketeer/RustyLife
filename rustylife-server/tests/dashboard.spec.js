@@ -14,6 +14,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 
 describe('Dashboard Panning & Zooming', () => {
     let mockCtx;
@@ -181,5 +183,45 @@ describe('Dashboard Panning & Zooming', () => {
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(false);
         expect(mockCtx.fillStyle).toBe('#10b981');
+    });
+
+    describe('Layout Width Constraints', () => {
+        it('should not have a fixed max-width on .container in index.html to allow full-width scaling', () => {
+            const filePath = path.resolve(__dirname, '../static/index.html');
+            const content = fs.readFileSync(filePath, 'utf8');
+
+            const styleMatch = content.match(/<style>([\s\S]*?)<\/style>/);
+            expect(styleMatch).not.toBeNull();
+            const styleCss = styleMatch[1];
+
+            const containerRuleMatch = styleCss.match(/\.container\s*\{([\s\S]*?)\}/);
+            expect(containerRuleMatch).not.toBeNull();
+            const containerCss = containerRuleMatch[1];
+
+            // Should not contain max-width limiting to pixels
+            expect(containerCss).not.toContain('max-width:');
+            
+            // Should be set to full width
+            expect(containerCss).toContain('width: 100%');
+        });
+
+        it('should not have a fixed max-width on .container in telemetry.html to allow full-width scaling', () => {
+            const filePath = path.resolve(__dirname, '../static/telemetry.html');
+            const content = fs.readFileSync(filePath, 'utf8');
+
+            const styleMatch = content.match(/<style>([\s\S]*?)<\/style>/);
+            expect(styleMatch).not.toBeNull();
+            const styleCss = styleMatch[1];
+
+            const containerRuleMatch = styleCss.match(/\.container\s*\{([\s\S]*?)\}/);
+            expect(containerRuleMatch).not.toBeNull();
+            const containerCss = containerRuleMatch[1];
+
+            // Should not contain max-width limiting to pixels
+            expect(containerCss).not.toContain('max-width:');
+            
+            // Should be set to full width
+            expect(containerCss).toContain('width: 100%');
+        });
     });
 });

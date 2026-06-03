@@ -29,7 +29,12 @@ fn test_concurrent_population_safety_no_flicker() {
     engine.place_cell(1, 0);
     engine.place_cell(2, 0);
 
-    assert_eq!(engine.living_count.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert_eq!(
+        engine
+            .living_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3
+    );
 
     // Start the simulation engine running continuously in the background
     engine.start();
@@ -45,18 +50,14 @@ fn test_concurrent_population_safety_no_flicker() {
             let metrics = engine_clone.capture_metrics_only();
 
             assert_eq!(
-                telemetry.population, 
-                3, 
-                "Flicker detected in capture_current_state: expected 3, got {} at Gen {}", 
-                telemetry.population, 
-                telemetry.generation
+                telemetry.population, 3,
+                "Flicker detected in capture_current_state: expected 3, got {} at Gen {}",
+                telemetry.population, telemetry.generation
             );
             assert_eq!(
-                metrics.population, 
-                3, 
-                "Flicker detected in capture_metrics_only: expected 3, got {} at Gen {}", 
-                metrics.population, 
-                metrics.generation
+                metrics.population, 3,
+                "Flicker detected in capture_metrics_only: expected 3, got {} at Gen {}",
+                metrics.population, metrics.generation
             );
             query_count += 1;
         }
@@ -77,9 +78,15 @@ fn test_concurrent_population_safety_no_flicker() {
             panic!("Reader thread panicked: {}", msg);
         }
     };
-    assert!(total_queries > 100, "Should have performed significant number of queries");
+    assert!(
+        total_queries > 100,
+        "Should have performed significant number of queries"
+    );
 
     // Stop the engine cleanly
     engine.stop();
-    assert!(engine.wait_for_quiescence(Duration::from_secs(2)), "Engine failed to stop cleanly");
+    assert!(
+        engine.wait_for_quiescence(Duration::from_secs(2)),
+        "Engine failed to stop cleanly"
+    );
 }
