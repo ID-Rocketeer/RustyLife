@@ -44,7 +44,15 @@ To configure Windows Task Scheduler to launch the script automatically at startu
    - Uncheck **Stop the task if it runs longer than**.
 7. Click **OK** and enter your Windows user credentials to save the task.
 
-Once registered, the monitor loop will start silently on startup, keeping the server persistent and logging all telemetry and crash logs to the local log file.
+> [!NOTE]
+> **Windows Hello / PIN / Fingerprint Users:**
+> Windows Task Scheduler does not support Windows Hello (PIN, fingerprint, or facial recognition) for saving tasks configured to "Run whether user is logged on or not".
+> If you encounter credential prompt failures:
+> - **Alternative A (Recommended for developer setups):** In the **General** tab, select **Run only when user is logged on**, and in the **Triggers** tab, set the trigger to **At log on** instead of *At startup*. This bypasses the password requirement completely.
+> - **Alternative B (Run as SYSTEM):** In the **General** tab, click **Change User or Group...**, type `SYSTEM`, click **OK**, and save. This runs the task under the built-in system account without requiring a password.
+> - **Alternative C (Use Account Password):** Enter your actual Microsoft Account or Windows Local Account password (not your PIN/passcode).
+
+Once registered, the monitor loop will start silently on startup (or log on), keeping the server persistent and logging all telemetry and crash logs to the local log file.
 
 ## Antivirus & Heuristic Blocks (e.g., Trend Micro)
 
