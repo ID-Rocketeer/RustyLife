@@ -49,6 +49,10 @@ async fn test_gui_shutdown_lifecycle() {
             "--port",
             "9100",
             "--gui",
+            "--telemetry-port",
+            "0",
+            "--ipc-port",
+            "0",
         ]) // Enable GUI to repro hang
         .stdout(std::process::Stdio::piped())
         .spawn()

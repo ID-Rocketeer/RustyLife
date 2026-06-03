@@ -64,6 +64,8 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
             "8081",
             "--ipc-port",
             "9002",
+            "--telemetry-port",
+            "0",
         ])
         .spawn()?;
     let _guard = ServerGuard(server);
@@ -157,6 +159,8 @@ async fn test_ack_flow_control() -> anyhow::Result<()> {
             "8082",
             "--ipc-port",
             "9003",
+            "--telemetry-port",
+            "0",
         ])
         .spawn()?;
     let _guard = ServerGuard(server);
@@ -262,6 +266,8 @@ async fn test_update_viewport_pushes_state_immediately() -> anyhow::Result<()> {
             "8083",
             "--ipc-port",
             "9004",
+            "--telemetry-port",
+            "0",
         ])
         .spawn()?;
     let _guard = ServerGuard(server);

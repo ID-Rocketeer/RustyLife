@@ -38,7 +38,18 @@ async fn test_telemetry_service() {
     assert!(status.success());
 
     let mut server_process = std::process::Command::new("cargo")
-        .args(["run", "--bin", "rustylife-server"])
+        .args([
+            "run",
+            "--bin",
+            "rustylife-server",
+            "--",
+            "--port",
+            "8089",
+            "--ipc-port",
+            "9009",
+            "--telemetry-port",
+            "8087",
+        ])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn server");
@@ -46,8 +57,8 @@ async fn test_telemetry_service() {
     // Wait for the server to start (including both 8080 and 8086)
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Connect to the new Telemetry Dashboard service on port 8086
-    let url = Url::parse("ws://127.0.0.1:8086/ws").unwrap();
+    // Connect to the new Telemetry Dashboard service on port 8087
+    let url = Url::parse("ws://127.0.0.1:8087/ws").unwrap();
 
     let connect_result = connect_async(url.as_str()).await;
 

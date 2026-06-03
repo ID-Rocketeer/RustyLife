@@ -61,6 +61,10 @@ pub struct Args {
     #[arg(short, long, default_value_t = 9001)]
     pub ipc_port: u16,
 
+    /// Port for the telemetry graphing interface
+    #[arg(long, default_value_t = 8086)]
+    pub telemetry_port: u16,
+
     /// Initial seed pattern (glider, blinker, breeder 1)
     #[arg(short, long)]
     pub seed: Option<String>,
@@ -607,6 +611,7 @@ fn main() {
     let shared_state_clone = shared_state.clone();
     let port = args.port;
     let ipc_port = args.ipc_port;
+    let telemetry_port = args.telemetry_port;
 
     rt.spawn(async move {
         let app = Router::new()
@@ -627,8 +632,14 @@ fn main() {
                 .route("/ws", get(ws_handler))
                 .with_state(telemetry_state);
 
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:8086").await.unwrap();
-            println!("Telemetry Server running on http://localhost:8086");
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", telemetry_port))
+                .await
+                .unwrap();
+            let local_port = listener.local_addr().unwrap().port();
+            println!(
+                "Telemetry Server running on http://localhost:{}",
+                local_port
+            );
             axum::serve(listener, telemetry_app).await.unwrap();
         });
 

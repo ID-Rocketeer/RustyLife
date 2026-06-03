@@ -38,7 +38,18 @@ async fn test_websocket_protocol_handshake() {
     assert!(status.success());
 
     let mut server_process = std::process::Command::new("cargo")
-        .args(["run", "--bin", "rustylife-server", "--", "--port", "9099"]) // Use non-standard port
+        .args([
+            "run",
+            "--bin",
+            "rustylife-server",
+            "--",
+            "--port",
+            "9099",
+            "--telemetry-port",
+            "0",
+            "--ipc-port",
+            "0",
+        ]) // Use non-standard port
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn server");
