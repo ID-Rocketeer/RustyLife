@@ -226,6 +226,7 @@ pub struct Engine {
     pub generation: AtomicU64,
     pub target_generation: AtomicU64,
     pub living_count: AtomicU64,
+    pub stable_population: AtomicU64,
     pub work: AtomicU64,
     pub net: AtomicI64,
     pub dead_block_count: AtomicU64, // Metric for pruning trigger
@@ -292,6 +293,7 @@ impl Engine {
             generation: AtomicU64::new(0),
             target_generation: AtomicU64::new(u64::MAX),
             living_count: AtomicU64::new(initial_pop),
+            stable_population: AtomicU64::new(initial_pop),
             work: AtomicU64::new(0),
             net: AtomicI64::new(0), // AtomicI64
             dead_block_count: AtomicU64::new(0),
@@ -420,6 +422,7 @@ impl Engine {
         self.space.seed_from_rle(x, y, &pattern);
         let pop = self.space.total_population();
         self.living_count.store(pop, Ordering::SeqCst);
+        self.stable_population.store(pop, Ordering::SeqCst);
     }
 
     /// Place a single alive cell at `(x, y)` and increment `living_count`.
@@ -441,6 +444,8 @@ impl Engine {
             mask,
         ));
         self.living_count.fetch_add(1, Ordering::SeqCst);
+        let final_pop = self.living_count.load(Ordering::SeqCst);
+        self.stable_population.store(final_pop, Ordering::SeqCst);
     }
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
@@ -661,6 +666,7 @@ impl Engine {
                     }
                     let pop = self.space.total_population();
                     self.living_count.store(pop, Ordering::SeqCst);
+                    self.stable_population.store(pop, Ordering::SeqCst);
                     self.stopping.store(true, Ordering::SeqCst);
                     *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
                     self.capture_state(false);
@@ -684,6 +690,7 @@ impl Engine {
                     self.space.seed_from_rle(0, 0, &rle);
                     let pop = self.space.total_population();
                     self.living_count.store(pop, Ordering::SeqCst);
+                    self.stable_population.store(pop, Ordering::SeqCst);
                     self.stopping.store(true, Ordering::SeqCst);
                     *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
                     self.capture_state(false);
@@ -707,6 +714,7 @@ impl Engine {
                     self.space.seed_from_rle(0, 0, &rle);
                     let pop = self.space.total_population();
                     self.living_count.store(pop, Ordering::SeqCst);
+                    self.stable_population.store(pop, Ordering::SeqCst);
                     self.target_generation.store(target_gen, Ordering::SeqCst);
                     self.stopping.store(false, Ordering::SeqCst);
                     *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
@@ -1067,6 +1075,9 @@ impl Engine {
 
         let prev = engine.phase_counter.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
+            let final_pop = engine.living_count.load(Ordering::SeqCst);
+            engine.stable_population.store(final_pop, Ordering::SeqCst);
+
             // Generation is complete
             let curr_gen = engine.generation.load(Ordering::SeqCst);
             let target = engine.target_generation.load(Ordering::SeqCst);
@@ -1096,7 +1107,7 @@ impl Engine {
 
     pub fn capture_metrics_only(&self) -> crate::Telemetry {
         let generation = self.generation.load(Ordering::SeqCst);
-        let living_count = self.living_count.load(Ordering::SeqCst) as usize;
+        let living_count = self.stable_population.load(Ordering::SeqCst) as usize;
 
         let (gps, work_rate, net_rate) = {
             let t = self.telemetry.lock().unwrap();
@@ -1124,7 +1135,7 @@ impl Engine {
     pub fn capture_current_state(&self) -> (Vec<((i128, i128), u8)>, crate::Telemetry) {
         let generation = self.generation.load(Ordering::SeqCst);
         // We now just allocate a fresh Vector per generation for zero-copy ownership transfer
-        let living_count = self.living_count.load(Ordering::SeqCst) as usize;
+        let living_count = self.stable_population.load(Ordering::SeqCst) as usize;
         let mut vec = Vec::with_capacity(living_count + (living_count / 4));
 
         self.space.collect_all_states_into(&mut vec);
