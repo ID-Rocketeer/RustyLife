@@ -656,7 +656,12 @@ fn main() {
     });
 
     if args.gui {
-        let options = eframe::NativeOptions::default();
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size(egui::vec2(1280.0, 720.0))
+                .with_min_inner_size(egui::vec2(960.0, 540.0)),
+            ..Default::default()
+        };
         let gui_state = gui_state.unwrap();
         // Subscribe to shutdown channel for GUI
         let gui_shutdown_rx = shutdown_tx.subscribe();
