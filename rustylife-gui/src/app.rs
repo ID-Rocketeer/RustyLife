@@ -684,9 +684,9 @@ impl eframe::App for RustyLifeApp {
                             }
                             ColorMode::BiState => {
                                 match state & 6 {
-                                    6 => egui::Color32::from_rgb(0, 255, 0),   // Alive (Green)
-                                    4 => egui::Color32::from_rgb(0, 0, 255),   // Born (Blue)
-                                    2 => egui::Color32::from_rgb(255, 0, 0),   // Dying (Red)
+                                    6 => egui::Color32::from_rgb(0, 255, 0), // Alive (Green)
+                                    4 => egui::Color32::from_rgb(0, 0, 255), // Born (Blue)
+                                    2 => egui::Color32::from_rgb(255, 0, 0), // Dying (Red)
                                     _ => continue,
                                 }
                             }

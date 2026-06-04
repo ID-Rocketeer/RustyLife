@@ -135,7 +135,9 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
                     break;
                 }
                 writer
-                    .write_all(&rustylife_core::Request::AckPreviousFrame { viewport: None }.to_bytes())
+                    .write_all(
+                        &rustylife_core::Request::AckPreviousFrame { viewport: None }.to_bytes(),
+                    )
                     .await?;
             }
             _ => {}
