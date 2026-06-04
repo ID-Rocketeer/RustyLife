@@ -901,10 +901,8 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                 is_ready_for_next_frame = false;
                             }
                             Request::AckPreviousFrame { viewport } => {
-                                if let Some(vp) = viewport {
-                                    if let Some(ClientType::FullSnapshot { viewport: ref mut current_vp }) = client_type {
-                                        *current_vp = Some(vp);
-                                    }
+                                if let (Some(vp), Some(ClientType::FullSnapshot { viewport: current_vp })) = (viewport, &mut client_type) {
+                                    *current_vp = Some(vp);
                                 }
                                 match &client_type {
                                     Some(ClientType::MetricsOnly) => {
@@ -1103,10 +1101,8 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                             is_ready_for_next_frame = false;
                         }
                         Request::AckPreviousFrame { viewport } => {
-                            if let Some(vp) = viewport {
-                                if let Some(ClientType::FullSnapshot { viewport: ref mut current_vp }) = client_type {
-                                    *current_vp = Some(vp);
-                                }
+                            if let (Some(vp), Some(ClientType::FullSnapshot { viewport: current_vp })) = (viewport, &mut client_type) {
+                                *current_vp = Some(vp);
                             }
                             let engine_gen = state.engine.generation();
                             if engine_gen > last_sent_generation {
