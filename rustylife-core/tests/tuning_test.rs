@@ -94,7 +94,7 @@ impl Workload for RPentomino {
         let alive_cells = space.collect_all_states();
         let living_count = alive_cells
             .iter()
-            .filter(|(_, view)| (*view & 0b10) != 0)
+            .filter(|(_, view)| (*view & 4) != 0)
             .count();
         assert_eq!(living_count, 116);
     }
@@ -137,7 +137,7 @@ impl Workload for StressTest {
         let alive_cells = space.collect_all_states();
         let living_count = alive_cells
             .iter()
-            .filter(|(_, view)| (*view & 0b10) != 0)
+            .filter(|(_, view)| (*view & 4) != 0)
             .count();
         let expected = self.count * self.count * 116;
         assert_eq!(living_count, expected);

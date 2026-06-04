@@ -448,14 +448,14 @@ fn test_four_gliders_stability() {
     space.storage().collect_all(
         guard.current_state_mask(),
         guard.last_state_mask(),
-        guard.next_state_mask(),
+        guard.last_last_state_mask(),
         &mut all_cells,
     );
 
     let mut live_cells = Vec::new();
     for ((x, y), state) in all_cells {
-        if state >= 2 {
-            // 2 = Born, 3 = Stable
+        if state >= 4 {
+            // CURRENT bit is set (4, 5, 6, 7)
             live_cells.push((x, y));
         }
     }
@@ -557,18 +557,18 @@ fn test_cell_correctly_transitions_through_lifecycle_states() {
 
     // After Step 1 (Generation 1):
     // Cell was Alive in G0, now Dead in G1.
-    // presenter_view(G1, G0, G-1) should return Some(0b01) (Dying)
+    // presenter_view(G1, G0, G-1) should return Some(2) (Dying: chronological 010)
     {
         let guard = space.read();
         let curr = guard.current_state_mask();
         let last = guard.last_state_mask();
-        let last_last = guard.next_state_mask();
+        let last_last = guard.last_last_state_mask();
 
         assert_eq!(guard.current_state_mask(), 0b10, "Should be Gen 1");
 
         space.storage().find_and_apply(0, 0, |cell| {
             let view = cell.presenter_view(curr, last, last_last);
-            assert_eq!(view, Some(0b01), "Should be Dying frame");
+            assert_eq!(view, Some(2), "Should be Dying frame");
         });
 
         // living_count should be 0
@@ -581,18 +581,18 @@ fn test_cell_correctly_transitions_through_lifecycle_states() {
 
     // After Step 2 (Generation 2):
     // Cell was Alive in G0, Dead in G1, Dead in G2.
-    // presenter_view(G2, G1, G0) should return Some(0b00) (Newly Dead / Erasure)
+    // presenter_view(G2, G1, G0) should return Some(1) (Newly Dead / Erasure: chronological 001)
     {
         let guard = space.read();
         let curr = guard.current_state_mask();
         let last = guard.last_state_mask();
-        let last_last = guard.next_state_mask();
+        let last_last = guard.last_last_state_mask();
 
         assert_eq!(guard.current_state_mask(), 0b100, "Should be Gen 2");
 
         space.storage().find_and_apply(0, 0, |cell| {
             let view = cell.presenter_view(curr, last, last_last);
-            assert_eq!(view, Some(0b00), "Should be Newly Dead (Erasure) frame");
+            assert_eq!(view, Some(1), "Should be Newly Dead (Erasure) frame");
         });
     }
 
@@ -602,16 +602,14 @@ fn test_cell_correctly_transitions_through_lifecycle_states() {
 
     // After Step 3 (Generation 3):
     // Cell was Alive in G0 (now overwritten by G3?), Dead in G1, Dead in G2, Dead in G3.
-    // Wait, G0 is same bit as G3.
-    // But calculate_next_state overwrites the mask.
     // presenter_view(G3, G2, G1) should return None (Stable Dead)
     {
         let guard = space.read();
         let curr = guard.current_state_mask();
         let last = guard.last_state_mask();
-        let last_last = guard.next_state_mask();
+        let last_last = guard.last_last_state_mask();
 
-        assert_eq!(guard.current_state_mask(), 0b1, "Should be Gen 3");
+        assert_eq!(guard.current_state_mask(), 0b1000, "Should be Gen 3");
 
         space.storage().find_and_apply(0, 0, |cell| {
             let view = cell.presenter_view(curr, last, last_last);

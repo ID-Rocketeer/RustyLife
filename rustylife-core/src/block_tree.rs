@@ -16,23 +16,24 @@
 use crate::cell::CellState;
 use std::cmp::Ordering;
 
-/// A block of 8x8 cells, packed into 3x 64-bit integers for history.
+/// A block of 8x8 cells, packed into 4x 64-bit integers for history.
 ///
-/// This struct maintains history for 3 generations (Current, Last, Next/LastLast)
+/// This struct maintains history for 4 generations (Current, Last, LastLast, Next)
 /// using a circular buffer approach compatible with `SimulationMasks`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Block8x8 {
-    // 3 bitboards acting as a circular buffer.
+    // 4 bitboards acting as a circular buffer.
     // Indexing follows the global mask logic (log2(mask)).
-    // Mask 1 (001) -> boards[0]
-    // Mask 2 (010) -> boards[1]
-    // Mask 4 (100) -> boards[2]
-    pub boards: [u64; 3],
+    // Mask 1 (0001) -> boards[0]
+    // Mask 2 (0010) -> boards[1]
+    // Mask 4 (0100) -> boards[2]
+    // Mask 8 (1000) -> boards[3]
+    pub boards: [u64; 4],
 }
 
 impl Block8x8 {
     pub fn new() -> Self {
-        Self { boards: [0; 3] }
+        Self { boards: [0; 4] }
     }
 }
 
@@ -196,13 +197,16 @@ impl Block8x8 {
         // Work: A block is 8x8 (64 cells). Since we processes the entire block via SIMD,
         // the CPU does exactly 64 cells worth of work whenever this function is called.
         let work = 64;
-        let is_dead = self.boards[0] == 0 && self.boards[1] == 0 && self.boards[2] == 0;
+        let is_dead = self.boards[0] == 0
+            && self.boards[1] == 0
+            && self.boards[2] == 0
+            && self.boards[3] == 0;
 
         (pop, born, died, work, is_dead)
     }
 
     pub fn is_dead(&self) -> bool {
-        self.boards[0] == 0 && self.boards[1] == 0 && self.boards[2] == 0
+        self.boards[0] == 0 && self.boards[1] == 0 && self.boards[2] == 0 && self.boards[3] == 0
     }
 
     /// Returns the bounding box of living cells in the given state index (0, 1, or 2).
@@ -367,12 +371,13 @@ impl BlockTree {
         (bx, by, lx, ly)
     }
 
-    /// Maps a mask (1, 2, 4) to an array index (0, 1, 2).
+    /// Maps a mask (1, 2, 4, 8) to an array index (0, 1, 2, 3).
     fn mask_to_index(mask: usize) -> usize {
         match mask {
             1 => 0,
             2 => 1,
             4 => 2,
+            8 => 3,
             _ => 0, // Fallback, shouldn't happen
         }
     }
@@ -519,13 +524,12 @@ impl BlockTree {
     ) {
         let c_idx = Self::mask_to_index(current_mask);
         let l_idx = Self::mask_to_index(last_mask);
-        let _ll_idx = Self::mask_to_index(last_last_mask);
+        let ll_idx = Self::mask_to_index(last_last_mask);
 
         // Iterate direct arena for performance (skipping tree traversal)
         for node in &self.arena.nodes {
-            // Optimization: If block is completely empty in all masks, skip?
-            // Block doesn't track emptiness, would need to check u64s.
-            if node.block.boards[0] == 0 && node.block.boards[1] == 0 && node.block.boards[2] == 0 {
+            // Optimization: If block is completely empty in all masks, skip
+            if node.block.is_dead() {
                 continue;
             }
 
@@ -539,19 +543,18 @@ impl BlockTree {
 
                     let c = (node.block.boards[c_idx] & bit_mask) != 0;
                     let l = (node.block.boards[l_idx] & bit_mask) != 0;
-                    // let ll = (node.block.boards[ll_idx] & bit_mask) != 0; // Unused for now
+                    let ll = (node.block.boards[ll_idx] & bit_mask) != 0;
 
-                    let state_byte = if c {
-                        if l {
-                            3 // Stable
-                        } else {
-                            2 // Born
-                        }
-                    } else if l {
-                        1 // Dying
-                    } else {
-                        0 // Ghost / Dead
-                    };
+                    let mut state_byte = 0u8;
+                    if c {
+                        state_byte |= 4;
+                    }
+                    if l {
+                        state_byte |= 2;
+                    }
+                    if ll {
+                        state_byte |= 1;
+                    }
 
                     if state_byte != 0 {
                         out.push(((bx_world + lx as i128, by_world + ly as i128), state_byte));
@@ -572,7 +575,7 @@ impl BlockTree {
     ) {
         let c_idx = Self::mask_to_index(current_mask);
         let l_idx = Self::mask_to_index(last_mask);
-        let _ll_idx = Self::mask_to_index(last_last_mask);
+        let ll_idx = Self::mask_to_index(last_last_mask);
 
         // For Rect, tree traversal might be faster if arena is huge?
         // But BST is sorted by Coordinates. Range query is possible.
@@ -610,19 +613,18 @@ impl BlockTree {
 
                     let c = (node.block.boards[c_idx] & bit_mask) != 0;
                     let l = (node.block.boards[l_idx] & bit_mask) != 0;
-                    // let ll = (node.block.boards[ll_idx] & bit_mask) != 0; // Unused for now
+                    let ll = (node.block.boards[ll_idx] & bit_mask) != 0;
 
-                    let state_byte = if c {
-                        if l {
-                            3 // Stable
-                        } else {
-                            2 // Born
-                        }
-                    } else if l {
-                        1 // Dying
-                    } else {
-                        0 // Ghost / Dead
-                    };
+                    let mut state_byte = 0u8;
+                    if c {
+                        state_byte |= 4;
+                    }
+                    if l {
+                        state_byte |= 2;
+                    }
+                    if ll {
+                        state_byte |= 1;
+                    }
 
                     if state_byte != 0 {
                         out.push(((x, y), state_byte));
@@ -634,7 +636,7 @@ impl BlockTree {
 
     pub fn population(&self, mask: u8) -> u64 {
         let board_idx = mask.trailing_zeros() as usize;
-        if board_idx >= 3 {
+        if board_idx >= 4 {
             // Fallback or error? If mask is 0, trailing_zeros is 32/64.
             // If mask is not power of 2, it picks lowest bit.
             // Assuming mask is valid 1, 2, 4.

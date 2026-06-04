@@ -63,7 +63,9 @@ let lastMouseX = 0;
 let lastMouseY = 0;
 
 let latestTelemetry = null;
-let isClassicMode = false;
+let colorMode = 'tri-state';
+colorModeBtn.innerText = 'Tri-State';
+colorModeBtn.classList.add('selected');
 
 function uiLoop() {
     if (latestTelemetry) {
@@ -191,6 +193,9 @@ function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
     const centerY = canvas.height / 2 + offsetY;
     const size = scale <= 1 ? scale : scale - 1;
 
+    // Group cells by color to batch draw calls and minimize state changes
+    const groups = new Map();
+
     let recordsOffset = binaryOffset;
     for (let i = 0; i < recordCount; i++) {
         // Check bounds (prevent overrun if CRC is at end)
@@ -202,29 +207,52 @@ function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
         recordsOffset += 33;
 
         let color;
-        if (isClassicMode) {
-            switch (state) {
-                case 0b11:
-                case 0b10:
-                    color = '#ffffff';
-                    break;
-                case 0b01:
-                    color = '#000000';
-                    break;
-                default:
-                    continue;
+        if (colorMode === 'classic') {
+            if ((state & 4) !== 0) {
+                color = '#00FF00';
+            } else {
+                continue;
             }
-        } else {
-            switch (state) {
-                case 0b11: color = '#3b82f6'; break;
-                case 0b10: color = '#10b981'; break;
-                case 0b01: color = '#ef4444'; break;
+        } else if (colorMode === 'bi-state') {
+            switch (state & 6) {
+                case 6: color = '#00FF00'; break; // Alive (Green)
+                case 4: color = '#0000FF'; break; // Born (Blue)
+                case 2: color = '#FF0000'; break; // Dying (Red)
                 default: continue;
             }
+        } else if (colorMode === 'tri-state') {
+            switch (state) {
+                case 1: color = '#FF0000'; break;
+                case 2: color = '#FF8000'; break;
+                case 3: color = '#FFFF00'; break;
+                case 4: color = '#0000FF'; break;
+                case 5: color = '#0080FF'; break;
+                case 6: color = '#00FFFF'; break;
+                case 7: color = '#00FF00'; break;
+                default: continue;
+            }
+        } else {
+            continue;
         }
 
+        let list = groups.get(color);
+        if (!list) {
+            list = [];
+            groups.set(color, list);
+        }
+        list.push(x, y);
+    }
+
+    // Batch draw each color group
+    for (const [color, coords] of groups.entries()) {
         ctx.fillStyle = color;
-        ctx.fillRect(centerX + x * scale, centerY + y * scale, size, size);
+        ctx.beginPath();
+        for (let j = 0; j < coords.length; j += 2) {
+            const rx = centerX + coords[j] * scale;
+            const ry = centerY + coords[j + 1] * scale;
+            ctx.rect(rx, ry, size, size);
+        }
+        ctx.fill();
     }
 }
 
@@ -336,6 +364,7 @@ function connect() {
 
             // Populate Patterns
             if (header.payload.patterns) {
+                patternSelect.innerHTML = '<option value="" disabled selected>Select Pattern...</option>';
                 header.payload.patterns.forEach(p => {
                     const opt = document.createElement('option');
                     opt.value = p.name;
@@ -466,12 +495,22 @@ zoomInBtn.onclick = () => updateZoom(1);
 zoomOutBtn.onclick = () => updateZoom(-1);
 
 colorModeBtn.onclick = () => {
-    isClassicMode = !isClassicMode;
-    if (isClassicMode) {
+    if (colorMode === 'classic') {
+        colorMode = 'bi-state';
+    } else if (colorMode === 'bi-state') {
+        colorMode = 'tri-state';
+    } else {
+        colorMode = 'classic';
+    }
+
+    colorModeBtn.innerText = colorMode === 'classic' ? 'Classic' : (colorMode === 'bi-state' ? 'Bi-State' : 'Tri-State');
+
+    if (colorMode !== 'bi-state') {
         colorModeBtn.classList.add('selected');
     } else {
         colorModeBtn.classList.remove('selected');
     }
+
     if (lastState) {
         renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     }

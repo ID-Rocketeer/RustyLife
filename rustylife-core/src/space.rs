@@ -51,8 +51,7 @@ impl SparseStorage {
         // Or we overwrite? Using 'write Alive only' is safer for additive seeding.
         let mut tree = self.buckets[idx].write().unwrap_or_else(|e| e.into_inner());
 
-        for i in 0..8 {
-            let mask = 1 << i;
+        for &mask in &[1, 2, 4, 8] {
             if cell.state(mask) == CellState::Alive {
                 tree.set_cell(coords.0, coords.1, mask, CellState::Alive);
             }
@@ -134,7 +133,7 @@ impl SparseStorage {
         &self,
         current_mask: usize,
         last_mask: usize,
-        next_mask: usize,
+        last_last_mask: usize,
         writer: &mut impl Write,
         hasher: &mut crc32fast::Hasher,
     ) -> std::io::Result<()> {
@@ -145,7 +144,7 @@ impl SparseStorage {
             buffer.clear();
             {
                 let tree = bucket.read().unwrap_or_else(|e| e.into_inner());
-                tree.collect_cells(current_mask, last_mask, next_mask, &mut buffer);
+                tree.collect_cells(current_mask, last_mask, last_last_mask, &mut buffer);
             }
 
             for ((x, y), state) in &buffer {
@@ -198,10 +197,11 @@ impl SparseStorage {
         // We need write lock to allow mutation if 'f' modifies the cell
         let mut tree = self.buckets[idx].write().unwrap_or_else(|e| e.into_inner());
 
-        // Reconstruct cell state from all 3 masks/phases to match legacy behavior
+        // Reconstruct cell state from all 4 masks/phases to match legacy behavior
         let s1 = tree.get_cell(x, y, 1);
         let s2 = tree.get_cell(x, y, 2);
         let s4 = tree.get_cell(x, y, 4);
+        let s8 = tree.get_cell(x, y, 8);
 
         // We initialize with mask 1's state, but we need to ensure the Cell instance
         // reflects the full history if possible, or at least allows us to write back to all.
@@ -212,7 +212,7 @@ impl SparseStorage {
 
         // Propagate other states if they differ from what `new(..., 1)` set.
         // `Cell::new(..., 1)` sets bit 1 based on s1.
-        // We need to set bit 2 based on s2, bit 4 based on s4.
+        // We need to set bit 2 based on s2, bit 4 based on s4, bit 8 based on s8.
         if s2 == CellState::Alive {
             cell.set_state_at(2, CellState::Alive);
         } else {
@@ -225,6 +225,12 @@ impl SparseStorage {
             cell.set_state_at(4, CellState::Dead);
         }
 
+        if s8 == CellState::Alive {
+            cell.set_state_at(8, CellState::Alive);
+        } else {
+            cell.set_state_at(8, CellState::Dead);
+        }
+
         // Execute closure
         let result = f(&mut cell);
 
@@ -233,6 +239,7 @@ impl SparseStorage {
         tree.set_cell(x, y, 1, cell.state(1));
         tree.set_cell(x, y, 2, cell.state(2));
         tree.set_cell(x, y, 4, cell.state(4));
+        tree.set_cell(x, y, 8, cell.state(8));
 
         Some(result)
     }
@@ -345,7 +352,7 @@ impl SimulationSpace {
         let guard = self.mask.read();
         let current_mask = guard.current_state_mask();
         let last_mask = guard.last_state_mask();
-        let last_last_mask = guard.next_state_mask(); // Approximate semantic
+        let last_last_mask = guard.last_last_state_mask();
 
         let mut all = Vec::new();
         self.storage()
@@ -357,7 +364,7 @@ impl SimulationSpace {
         let guard = self.mask.read();
         let current_mask = guard.current_state_mask();
         let last_mask = guard.last_state_mask();
-        let last_last_mask = guard.next_state_mask();
+        let last_last_mask = guard.last_last_state_mask();
 
         self.storage()
             .collect_all(current_mask, last_mask, last_last_mask, all);
@@ -389,9 +396,9 @@ impl SimulationSpace {
         let guard = self.mask.read();
         let curr = guard.current_state_mask();
         let last = guard.last_state_mask();
-        let next = guard.next_state_mask();
+        let last_last = guard.last_last_state_mask();
         self.storage()
-            .collect_in_rect(min, max, curr, last, next, out);
+            .collect_in_rect(min, max, curr, last, last_last, out);
     }
 
     // collect_metric_stats removed
@@ -575,7 +582,7 @@ impl SimulationSpace {
             record_count,
             guard.current_state_mask(),
             guard.last_state_mask(),
-            guard.next_state_mask(),
+            guard.last_last_state_mask(),
         )
     }
 
@@ -589,7 +596,7 @@ impl SimulationSpace {
         record_count: u64,
         current_mask: usize,
         last_mask: usize,
-        next_mask: usize,
+        last_last_mask: usize,
     ) -> std::io::Result<()> {
         let mut file = std::fs::File::create(path)?;
         let mut hasher = crc32fast::Hasher::new();
@@ -609,7 +616,7 @@ impl SimulationSpace {
         self.storage().write_cells_streaming(
             current_mask,
             last_mask,
-            next_mask,
+            last_last_mask,
             &mut buffered_writer,
             &mut hasher,
         )?;
@@ -680,7 +687,7 @@ mod tests {
         space.storage().collect_all(
             guard.current_state_mask(),
             guard.last_state_mask(),
-            guard.next_state_mask(),
+            guard.last_last_state_mask(),
             &mut cells,
         );
         // Breeder 1 is expected to have exactly 4060 cells.

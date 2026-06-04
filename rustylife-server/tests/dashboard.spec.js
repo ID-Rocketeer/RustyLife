@@ -143,9 +143,11 @@ describe('Dashboard Panning & Zooming', () => {
         await new Promise(r => setTimeout(r, 10));
 
         const colorModeBtn = document.getElementById('color-mode-btn');
-        expect(colorModeBtn.classList.contains('selected')).toBe(false);
+        // Initial mode is Tri-State: button has label 'Tri-State' and is selected
+        expect(colorModeBtn.classList.contains('selected')).toBe(true);
+        expect(colorModeBtn.innerText).toBe('Tri-State');
 
-        // Define a state helper with 1 cell: Born (0b10) at coordinate (10, 10)
+        // Define a state helper with 1 cell at coordinate (10, 10)
         const makeStatePacket = (cellState) => {
             const metaStr = JSON.stringify({
                 type: "BinaryStateHeader",
@@ -165,24 +167,46 @@ describe('Dashboard Panning & Zooming', () => {
             return buffer;
         };
 
-        // Render first time in standard mode
-        wsInstance.onmessage({ data: makeStatePacket(0b10) });
+        // Render first time in Tri-State mode: state 4 (Born) -> Blue (#0000FF)
+        wsInstance.onmessage({ data: makeStatePacket(4) });
         await new Promise(r => setTimeout(r, 10));
+        expect(mockCtx.fillStyle).toBe('#0000FF');
 
-        // In standard mode, 0b10 is Green (#10b981)
-        expect(mockCtx.fillStyle).toBe('#10b981');
-
-        // Toggle B&W mode
+        // Toggle to Classic mode
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(true);
+        expect(colorModeBtn.innerText).toBe('Classic');
 
-        // Click forces rerender, verify that fillStyle is updated to white (#ffffff)
-        expect(mockCtx.fillStyle).toBe('#ffffff');
+        // Classic mode rerenders cell with state 4 (currently alive) -> Green (#00FF00)
+        expect(mockCtx.fillStyle).toBe('#00FF00');
 
-        // Toggle back to standard mode
+        // Toggle to Bi-State mode
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(false);
-        expect(mockCtx.fillStyle).toBe('#10b981');
+        expect(colorModeBtn.innerText).toBe('Bi-State');
+
+        // Bi-State mode rerenders cell with state 4 (Born) -> Blue (#0000FF)
+        expect(mockCtx.fillStyle).toBe('#0000FF');
+
+        // Toggle to Tri-State mode
+        colorModeBtn.click();
+        expect(colorModeBtn.classList.contains('selected')).toBe(true);
+        expect(colorModeBtn.innerText).toBe('Tri-State');
+
+        // Tri-state mode with state 2 (Dying) -> Orange (#FF8000)
+        wsInstance.onmessage({ data: makeStatePacket(2) });
+        await new Promise(r => setTimeout(r, 10));
+        expect(mockCtx.fillStyle).toBe('#FF8000');
+
+        // Toggle back to Classic mode
+        colorModeBtn.click();
+        expect(colorModeBtn.classList.contains('selected')).toBe(true);
+        expect(colorModeBtn.innerText).toBe('Classic');
+
+        // Classic mode: send cell with state 4 -> Green (#00FF00)
+        wsInstance.onmessage({ data: makeStatePacket(4) });
+        await new Promise(r => setTimeout(r, 10));
+        expect(mockCtx.fillStyle).toBe('#00FF00');
     });
 
     describe('Layout Width Constraints', () => {

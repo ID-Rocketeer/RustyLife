@@ -95,7 +95,7 @@ fn run_r_pentomino_test(pool_size: usize, bucket_count: usize) {
     let alive_cells = space.collect_all_states();
     let living_count = alive_cells
         .iter()
-        .filter(|(_, view)| (*view & 0b10) != 0)
+        .filter(|(_, view)| (*view & 4) != 0)
         .count();
 
     assert_eq!(

@@ -21,6 +21,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorMode {
+    Classic,
+    BiState,
+    TriState,
+}
+
 pub struct RustyLifeApp {
     state: Arc<Mutex<AppState>>,
     handler: Box<dyn UserActionHandler>,
@@ -38,8 +45,8 @@ pub struct RustyLifeApp {
     // Styling
     first_frame: bool,
 
-    // Classic (Black & White) presentation mode
-    pub(crate) classic_mode: bool,
+    // Cell presentation color mode
+    pub(crate) color_mode: ColorMode,
 }
 
 impl RustyLifeApp {
@@ -58,7 +65,7 @@ impl RustyLifeApp {
             last_update_time: None,
             shutdown_rx,
             first_frame: true,
-            classic_mode: false,
+            color_mode: ColorMode::TriState,
         }
     }
 }
@@ -281,18 +288,27 @@ impl eframe::App for RustyLifeApp {
                                 });
                             });
 
-                            let classic_btn = egui::Button::new(
-                                egui::RichText::new("Classic").size(15.0).strong(),
+                            let mode_label = match self.color_mode {
+                                ColorMode::Classic => "Classic",
+                                ColorMode::BiState => "Bi-State",
+                                ColorMode::TriState => "Tri-State",
+                            };
+
+                            let color_btn = egui::Button::new(
+                                egui::RichText::new(mode_label).size(15.0).strong(),
                             )
-                            .min_size(Vec2::new(0.0, btn_h))
-                            .selected(self.classic_mode);
+                            .min_size(Vec2::new(0.0, btn_h));
 
                             if ui
-                                .add_sized([64.0, btn_h], classic_btn)
-                                .on_hover_text("Toggle classic black & white cell presentation")
+                                .add_sized([80.0, btn_h], color_btn)
+                                .on_hover_text("Cycle cell presentation mode (Classic -> Bi-State -> Tri-State)")
                                 .clicked()
                             {
-                                self.classic_mode = !self.classic_mode;
+                                self.color_mode = match self.color_mode {
+                                    ColorMode::Classic => ColorMode::BiState,
+                                    ColorMode::BiState => ColorMode::TriState,
+                                    ColorMode::TriState => ColorMode::Classic,
+                                };
                             }
 
                             if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
@@ -658,18 +674,33 @@ impl eframe::App for RustyLifeApp {
                     }
 
                     for ((x, y), state) in cells {
-                        let color = if self.classic_mode {
-                            match state {
-                                0b11 | 0b10 => egui::Color32::WHITE,
-                                0b01 => egui::Color32::BLACK,
-                                _ => continue,
+                        let color = match self.color_mode {
+                            ColorMode::Classic => {
+                                if (state & 4) != 0 {
+                                    egui::Color32::from_rgb(0, 255, 0)
+                                } else {
+                                    continue;
+                                }
                             }
-                        } else {
-                            match state {
-                                0b11 => egui::Color32::from_rgb(59, 130, 246), // Alive (Blue)
-                                0b10 => egui::Color32::from_rgb(16, 185, 129), // Born (Green)
-                                0b01 => egui::Color32::from_rgb(239, 68, 68),  // Dying (Red)
-                                _ => continue,
+                            ColorMode::BiState => {
+                                match state & 6 {
+                                    6 => egui::Color32::from_rgb(0, 255, 0),   // Alive (Green)
+                                    4 => egui::Color32::from_rgb(0, 0, 255),   // Born (Blue)
+                                    2 => egui::Color32::from_rgb(255, 0, 0),   // Dying (Red)
+                                    _ => continue,
+                                }
+                            }
+                            ColorMode::TriState => {
+                                match state {
+                                    1 => egui::Color32::from_rgb(255, 0, 0),   // Red
+                                    2 => egui::Color32::from_rgb(255, 128, 0), // Orange
+                                    3 => egui::Color32::from_rgb(255, 255, 0), // Yellow
+                                    4 => egui::Color32::from_rgb(0, 0, 255),   // Blue
+                                    5 => egui::Color32::from_rgb(0, 128, 255), // Light Blue
+                                    6 => egui::Color32::from_rgb(0, 255, 255), // Cyan
+                                    7 => egui::Color32::from_rgb(0, 255, 0),   // Green
+                                    _ => continue,
+                                }
                             }
                         };
 

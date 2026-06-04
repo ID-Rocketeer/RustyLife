@@ -32,7 +32,6 @@ impl Drop for EngineGuard {
     }
 }
 
-
 fn wait_for_idle(engine: &SimulationEngine) {
     let start = std::time::Instant::now();
     while !engine.is_stopped() {
@@ -114,7 +113,9 @@ fn test_block_pruning() {
     engine.step();
     wait_for_idle(&engine);
 
-    // Step 2 to ensure history clears (3 buffers!)
+    // Step to ensure history clears (4 buffers!)
+    engine.step();
+    wait_for_idle(&engine);
     engine.step();
     wait_for_idle(&engine);
     engine.step();

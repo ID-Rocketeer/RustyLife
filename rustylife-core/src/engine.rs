@@ -518,7 +518,7 @@ impl Engine {
             end,
             guard.current_state_mask(),
             guard.last_state_mask(),
-            guard.next_state_mask(),
+            guard.last_last_state_mask(),
             &mut out,
         );
         out
@@ -765,6 +765,7 @@ impl Engine {
             1 => 0,
             2 => 1,
             4 => 2,
+            8 => 3,
             _ => 0,
         };
 
@@ -909,12 +910,14 @@ impl Engine {
                 1 => 0,
                 2 => 1,
                 4 => 2,
+                8 => 3,
                 _ => 0,
             };
             let next_idx = match next_mask {
                 1 => 0,
                 2 => 1,
                 4 => 2,
+                8 => 3,
                 _ => 0,
             };
             (current_idx, next_idx)

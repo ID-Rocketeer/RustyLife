@@ -22,7 +22,7 @@ pub struct SimulationMasks {
 impl SimulationMasks {
     pub fn new() -> Self {
         Self {
-            mask_lock: RwLock::new(0b001),
+            mask_lock: RwLock::new(0b0001),
         }
     }
 }
@@ -42,24 +42,24 @@ impl SimulationMasks {
         }
     }
 
-    /// Cycles the global mask (`0b001 -> 0b010 -> 0b100`).
+    /// Cycles the global mask (`0b0001 -> 0b0010 -> 0b0100 -> 0b1000`).
     /// This requires a write lock, so it will block until all read guards are released.
     pub fn cycle(&self) {
         let mut mask = self.mask_lock.write().expect("Lock poisoned");
-        *mask = if *mask == 0b100 { 0b001 } else { *mask << 1 };
+        *mask = if *mask == 0b1000 { 0b0001 } else { *mask << 1 };
     }
 
-    /// Resets the mask to the initial state (0b001).
+    /// Resets the mask to the initial state (0b0001).
     pub fn reset(&self) {
         let mut mask = self.mask_lock.write().expect("Lock poisoned");
-        *mask = 0b001;
+        *mask = 0b0001;
     }
 
     /// For testing: tries to cycle and returns false if it would block.
     #[cfg(test)]
     pub fn try_cycle(&self) -> bool {
         if let Ok(mut mask) = self.mask_lock.try_write() {
-            *mask = if *mask == 0b100 { 0b001 } else { *mask << 1 };
+            *mask = if *mask == 0b1000 { 0b0001 } else { *mask << 1 };
             true
         } else {
             false
@@ -77,18 +77,26 @@ impl<'a> MaskGuard<'a> {
     }
 
     pub fn next_state_mask(&self) -> usize {
-        if *self.guard == 0b100 {
-            0b001
+        if *self.guard == 0b1000 {
+            0b0001
         } else {
             *self.guard << 1
         }
     }
 
     pub fn last_state_mask(&self) -> usize {
-        if *self.guard == 0b001 {
-            0b100
+        if *self.guard == 0b0001 {
+            0b1000
         } else {
             *self.guard >> 1
+        }
+    }
+
+    pub fn last_last_state_mask(&self) -> usize {
+        match *self.guard {
+            0b0001 => 0b0100,
+            0b0010 => 0b1000,
+            other => other >> 2,
         }
     }
 }
@@ -102,27 +110,40 @@ mod tests {
         let manager = SimulationMasks::new();
         {
             let guard = manager.read();
-            assert_eq!(guard.current_state_mask(), 0b001);
-            assert_eq!(guard.next_state_mask(), 0b010);
-            assert_eq!(guard.last_state_mask(), 0b100);
+            assert_eq!(guard.current_state_mask(), 0b0001);
+            assert_eq!(guard.next_state_mask(), 0b0010);
+            assert_eq!(guard.last_state_mask(), 0b1000);
+            assert_eq!(guard.last_last_state_mask(), 0b0100);
         }
 
         manager.cycle();
 
         {
             let guard = manager.read();
-            assert_eq!(guard.current_state_mask(), 0b010);
-            assert_eq!(guard.next_state_mask(), 0b100);
-            assert_eq!(guard.last_state_mask(), 0b001);
+            assert_eq!(guard.current_state_mask(), 0b0010);
+            assert_eq!(guard.next_state_mask(), 0b0100);
+            assert_eq!(guard.last_state_mask(), 0b0001);
+            assert_eq!(guard.last_last_state_mask(), 0b1000);
         }
 
         manager.cycle();
 
         {
             let guard = manager.read();
-            assert_eq!(guard.current_state_mask(), 0b100);
-            assert_eq!(guard.next_state_mask(), 0b001);
-            assert_eq!(guard.last_state_mask(), 0b010);
+            assert_eq!(guard.current_state_mask(), 0b0100);
+            assert_eq!(guard.next_state_mask(), 0b1000);
+            assert_eq!(guard.last_state_mask(), 0b0010);
+            assert_eq!(guard.last_last_state_mask(), 0b0001);
+        }
+
+        manager.cycle();
+
+        {
+            let guard = manager.read();
+            assert_eq!(guard.current_state_mask(), 0b1000);
+            assert_eq!(guard.next_state_mask(), 0b0001);
+            assert_eq!(guard.last_state_mask(), 0b0100);
+            assert_eq!(guard.last_last_state_mask(), 0b0010);
         }
     }
 
@@ -144,9 +165,9 @@ mod tests {
                 let _guard2 = manager.read();
                 {
                     let _guard3 = manager.read();
-                    assert_eq!(_guard1.current_state_mask(), 0b001);
-                    assert_eq!(_guard2.current_state_mask(), 0b001);
-                    assert_eq!(_guard3.current_state_mask(), 0b001);
+                    assert_eq!(_guard1.current_state_mask(), 0b0001);
+                    assert_eq!(_guard2.current_state_mask(), 0b0001);
+                    assert_eq!(_guard3.current_state_mask(), 0b0001);
                 }
             }
         }

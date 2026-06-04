@@ -102,20 +102,20 @@ impl Cell {
         let bits = self.states.load(Ordering::Acquire);
         let current_alive = (bits & (current_mask as u8)) != 0;
         let last_alive = (bits & (last_mask as u8)) != 0;
+        let last_last_alive = (bits & (last_last_mask as u8)) != 0;
 
+        let mut val = 0u8;
         if current_alive {
-            if last_alive {
-                Some(0b11) // Precise: Stable Alive
-            } else {
-                Some(0b10) // Precise: New Born
-            }
-        } else if last_alive {
-            Some(0b01) // Precise: Dying
-        } else if (bits & (last_last_mask as u8)) != 0 {
-            Some(0b00) // Precise: Newly Dead / Erasure (Ghost frame)
-        } else {
-            None // Stable Dead
+            val |= 4;
         }
+        if last_alive {
+            val |= 2;
+        }
+        if last_last_alive {
+            val |= 1;
+        }
+
+        if val == 0 { None } else { Some(val) }
     }
 
     /// Increments the neighbor count using an atomic CAS loop to handle lazy reset.
@@ -310,5 +310,52 @@ mod tests {
 
         cell.reset_neighbor_count(guard.current_state_mask());
         assert_eq!(cell.get_neighbor_count(guard.current_state_mask()), 0);
+    }
+
+    #[test]
+    fn test_presenter_view() {
+        let manager = SimulationMasks::new();
+        // 0b0001
+        let guard = manager.read();
+        let current = guard.current_state_mask();
+        let last = guard.last_state_mask();
+        let last_last = guard.last_last_state_mask();
+
+        let cell = Cell::new(0, 0, CellState::Dead, current);
+
+        // 000
+        assert_eq!(cell.presenter_view(current, last, last_last), None);
+
+        // 001 (last-last alive)
+        cell.set_state_at(last_last, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(1));
+
+        // 010 (last alive)
+        cell.set_state_at(last_last, CellState::Dead);
+        cell.set_state_at(last, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(2));
+
+        // 011 (last and last-last alive)
+        cell.set_state_at(last_last, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(3));
+
+        // 100 (current alive)
+        cell.set_state_at(last, CellState::Dead);
+        cell.set_state_at(last_last, CellState::Dead);
+        cell.set_state_at(current, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(4));
+
+        // 101 (current and last-last alive)
+        cell.set_state_at(last_last, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(5));
+
+        // 110 (current and last alive)
+        cell.set_state_at(last_last, CellState::Dead);
+        cell.set_state_at(last, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(6));
+
+        // 111 (all alive)
+        cell.set_state_at(last_last, CellState::Alive);
+        assert_eq!(cell.presenter_view(current, last, last_last), Some(7));
     }
 }
