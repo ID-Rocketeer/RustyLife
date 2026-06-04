@@ -46,7 +46,9 @@ fn test_handshake_serialization() {
     let de_hs_full: Request = serde_json::from_str(&json_full).unwrap();
     assert_eq!(hs_full, de_hs_full);
 
-    let ack = Request::AckPreviousFrame;
+    let ack = Request::AckPreviousFrame {
+        viewport: Some(((-5, -5), (5, 5))),
+    };
     let de_ack: Request = serde_json::from_str(&serde_json::to_string(&ack).unwrap()).unwrap();
     assert_eq!(ack, de_ack);
 

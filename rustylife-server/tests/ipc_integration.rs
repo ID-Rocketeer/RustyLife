@@ -135,7 +135,7 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
                     break;
                 }
                 writer
-                    .write_all(&rustylife_core::Request::AckPreviousFrame.to_bytes())
+                    .write_all(&rustylife_core::Request::AckPreviousFrame { viewport: None }.to_bytes())
                     .await?;
             }
             _ => {}
@@ -232,7 +232,7 @@ async fn test_ack_flow_control() -> anyhow::Result<()> {
     );
 
     writer
-        .write_all(&rustylife_core::Request::AckPreviousFrame.to_bytes())
+        .write_all(&rustylife_core::Request::AckPreviousFrame { viewport: None }.to_bytes())
         .await?;
     // We dropped the previous frame by not being ready. Ask the engine to step again
     // so we can receive the new frame now that we are ready.

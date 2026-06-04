@@ -295,6 +295,7 @@ function updateServerViewport() {
 }
 
 function updateServerViewportDebounced(ms = 250) {
+    if (isRunning) return; // Suppress debounced viewport updates when simulation is active (ACK will carry it)
     if (debounceTimeout) clearTimeout(debounceTimeout);
     debounceTimeout = setTimeout(() => {
         updateServerViewport();
@@ -400,8 +401,8 @@ function connect() {
 
             renderCellsHybrid(meta, view, binaryOffset);
 
-            // Acknowledge the frame to request the next one
-            sendRequest("AckPreviousFrame");
+            // Acknowledge the frame to request the next one (including the current viewport)
+            sendRequest("AckPreviousFrame", { viewport: getViewportPayload() });
             
         } else if (header.type === "Error") {
             console.error("Server Error:", header.payload);

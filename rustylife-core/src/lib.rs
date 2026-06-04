@@ -62,7 +62,9 @@ pub enum Request {
     HandshakeFullSnapshot {
         viewport: Option<((i128, i128), (i128, i128))>,
     },
-    AckPreviousFrame,
+    AckPreviousFrame {
+        viewport: Option<((i128, i128), (i128, i128))>,
+    },
     UpdateViewport {
         viewport: ((i128, i128), (i128, i128)),
     },

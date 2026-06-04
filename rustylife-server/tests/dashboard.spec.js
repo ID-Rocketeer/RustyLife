@@ -40,6 +40,9 @@ describe('Dashboard Panning & Zooming', () => {
 
         mockCtx = {
             fillRect: vi.fn(),
+            beginPath: vi.fn(),
+            rect: vi.fn(),
+            fill: vi.fn(),
             fillStyle: '',
             clearRect: vi.fn()
         };
@@ -82,7 +85,7 @@ describe('Dashboard Panning & Zooming', () => {
         await new Promise(r => setTimeout(r, 10));
 
         // Verify it rendered the initial state
-        const initialDrawCount = mockCtx.fillRect.mock.calls.length;
+        const initialDrawCount = mockCtx.fill.mock.calls.length;
         expect(initialDrawCount).toBeGreaterThan(0);
 
         // 2. Simulate panning while paused
@@ -91,9 +94,9 @@ describe('Dashboard Panning & Zooming', () => {
         window.dispatchEvent(new MouseEvent('mousemove', { clientX: 10, clientY: 10 }));
         window.dispatchEvent(new MouseEvent('mouseup'));
 
-        // Panning should have triggered another renderCellsHybrid call which should call fillRect again
+        // Panning should have triggered another renderCellsHybrid call which should call fill again
         // Due to the bug, it aborts immediately and never repaints!
-        expect(mockCtx.fillRect.mock.calls.length).toBeGreaterThan(initialDrawCount);
+        expect(mockCtx.fill.mock.calls.length).toBeGreaterThan(initialDrawCount);
     });
 
     it('should NOT reset viewport center when generation resets to 0', async () => {

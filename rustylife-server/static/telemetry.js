@@ -196,13 +196,13 @@ function connect() {
             updateTelemetry(telemetry);
 
             // Acknowledge the frame to request the next one
-            sendRequest("AckPreviousFrame");
+            sendRequest("AckPreviousFrame", { viewport: null });
         } else if (header.type === "TelemetryBundle") {
             const bundle = header.payload ? header.payload.telemetry : header.telemetry;
             for (const t of bundle) {
                 updateTelemetry(t);
             }
-            sendRequest("AckPreviousFrame");
+            sendRequest("AckPreviousFrame", { viewport: null });
         } else if (header.type === "Error") {
             console.error("Server Error:", header.payload);
         }

@@ -160,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
                                         }
 
                                         // Acknowledge receipt of the frame to get the next one
-                                        let _ = writer.write_all(&Request::AckPreviousFrame.to_bytes()).await;
+                                        let _ = writer.write_all(&Request::AckPreviousFrame { viewport: None }.to_bytes()).await;
                                     }
                                     rustylife_core::Response::Error(msg) => {
                                         // Ignore 'not found' errors (though server now sends Ok)
