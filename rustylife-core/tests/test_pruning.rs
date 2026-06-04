@@ -17,6 +17,22 @@ use rustylife_core::engine::SimulationEngine;
 use rustylife_core::space::SimulationSpace;
 use std::sync::Arc;
 
+struct EngineGuard(Arc<SimulationEngine>);
+
+impl std::ops::Deref for EngineGuard {
+    type Target = SimulationEngine;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for EngineGuard {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
+
 fn wait_for_idle(engine: &SimulationEngine) {
     let start = std::time::Instant::now();
     while !engine.is_stopped() {
@@ -30,7 +46,7 @@ fn wait_for_idle(engine: &SimulationEngine) {
 #[test]
 fn test_block_pruning() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-    let engine = SimulationEngine::new(space.clone(), 1);
+    let engine = EngineGuard(SimulationEngine::new(space.clone(), 1));
 
     // Place a glider at (0,0). It will move SE.
     // Block size is 8x8.
@@ -58,12 +74,6 @@ fn test_block_pruning() {
     // Glider at 0,0. Moves +1,+1 every 4 gens.
     // To pass x=8, y=8. Needs > 32 gens.
     // Let's run 60 gens.
-
-    let engine_clone = engine.clone();
-    std::thread::spawn(move || {
-        let local_queue = crossbeam_deque::Worker::new_fifo();
-        SimulationEngine::run_worker(engine_clone, 0, local_queue);
-    });
 
     for _ in 0..60 {
         engine.step();
@@ -121,16 +131,10 @@ fn test_block_pruning() {
 #[test]
 fn test_pruning_headroom() {
     let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-    let engine = SimulationEngine::new(space.clone(), 1);
+    let engine = EngineGuard(SimulationEngine::new(space.clone(), 1));
 
     // Seed a glider that moves and leaves dead blocks
     engine.seed_sync(0, 0, "bob$2bo$3o!".to_string());
-
-    let engine_clone = engine.clone();
-    std::thread::spawn(move || {
-        let local_queue = crossbeam_deque::Worker::new_fifo();
-        SimulationEngine::run_worker(engine_clone, 0, local_queue);
-    });
 
     // Run enough steps to create dead blocks but keep some alive
     for _ in 0..40 {

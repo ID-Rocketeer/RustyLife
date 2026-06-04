@@ -702,7 +702,7 @@ fn test_engine_seed_processing() {
     let space = std::sync::Arc::new(rustylife_core::space::SimulationSpace::new(
         rustylife_core::BUCKET_COUNT,
     ));
-    let engine = rustylife_core::engine::SimulationEngine::new(std::sync::Arc::clone(&space), 4);
+    let engine = TestContext::new(std::sync::Arc::clone(&space), 4);
     engine.add_subscriber(std::sync::Arc::clone(&subscriber)
         as std::sync::Arc<dyn rustylife_core::engine::EngineSubscriber>);
 
@@ -814,7 +814,7 @@ fn test_engine_seed_by_name() {
     let space = std::sync::Arc::new(rustylife_core::space::SimulationSpace::new(
         rustylife_core::BUCKET_COUNT,
     ));
-    let engine = rustylife_core::engine::SimulationEngine::new(space.clone(), 4);
+    let engine = TestContext::new(space.clone(), 4);
 
     // Register a pattern
     engine.register_pattern(rustylife_core::PatternInfo {
@@ -827,15 +827,6 @@ fn test_engine_seed_by_name() {
 
     // Seed by NAME
     engine.seed("TestGlider".to_string());
-
-    // Spawn workers matching pool size
-    for i in 0..4 {
-        let engine_clone = std::sync::Arc::clone(&engine);
-        std::thread::spawn(move || {
-            let local_queue = crossbeam_deque::Worker::new_fifo();
-            rustylife_core::engine::Engine::run_worker(engine_clone, i, local_queue);
-        });
-    }
 
     // Wait for Seed to be processed
     let start = std::time::Instant::now();

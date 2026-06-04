@@ -29,6 +29,15 @@ fn encode_request(req: &Request) -> Vec<u8> {
     buf
 }
 
+struct ServerGuard(std::process::Child);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[tokio::test]
 async fn test_websocket_protocol_handshake() {
     let status = std::process::Command::new("cargo")
@@ -37,7 +46,7 @@ async fn test_websocket_protocol_handshake() {
         .expect("Failed to build server");
     assert!(status.success());
 
-    let mut server_process = std::process::Command::new("cargo")
+    let server_process = std::process::Command::new("cargo")
         .args([
             "run",
             "--bin",
@@ -53,6 +62,7 @@ async fn test_websocket_protocol_handshake() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn server");
+    let _guard = ServerGuard(server_process);
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -105,9 +115,6 @@ async fn test_websocket_protocol_handshake() {
         }
     })
     .await;
-
-    let _ = server_process.kill();
-    let _ = server_process.wait();
 
     if timeout.is_err() {
         panic!("Timed out waiting for BinaryStateHeader");

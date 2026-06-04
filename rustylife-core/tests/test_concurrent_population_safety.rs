@@ -18,11 +18,26 @@ use rustylife_core::space::SimulationSpace;
 use std::sync::Arc;
 use std::time::Duration;
 
+struct EngineGuard(Arc<SimulationEngine>);
+
+impl std::ops::Deref for EngineGuard {
+    type Target = SimulationEngine;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for EngineGuard {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
 #[test]
 fn test_concurrent_population_safety_no_flicker() {
     let space = Arc::new(SimulationSpace::new(4));
     // Run with multiple worker threads to maximize parallel/concurrent operations
-    let engine = SimulationEngine::new(space.clone(), 4);
+    let engine = EngineGuard(SimulationEngine::new(space.clone(), 4));
 
     // Seed a blinker pattern (exactly 3 cells, oscillates but remains exactly 3 cells in all generations)
     engine.place_cell(0, 0);
@@ -40,7 +55,7 @@ fn test_concurrent_population_safety_no_flicker() {
     engine.start();
 
     // Query telemetry and state continuously in a tight loop from a spawned thread to detect any transient flicker
-    let engine_clone = engine.clone();
+    let engine_clone = engine.0.clone();
     let start = std::time::Instant::now();
     let reader_handle = std::thread::spawn(move || {
         let mut query_count = 0;

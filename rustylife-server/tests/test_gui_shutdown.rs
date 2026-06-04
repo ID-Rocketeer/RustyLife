@@ -28,6 +28,15 @@ fn encode_request(req: &Request) -> Vec<u8> {
     buf
 }
 
+struct ServerGuard(std::process::Child);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[tokio::test]
 async fn test_gui_shutdown_lifecycle() {
     // Skip if running in headless Linux CI without a display
@@ -40,7 +49,7 @@ async fn test_gui_shutdown_lifecycle() {
     }
 
     // 1. Spawn Server with GUI
-    let mut server_process = std::process::Command::new("cargo")
+    let server_process = std::process::Command::new("cargo")
         .args([
             "run",
             "--bin",
@@ -57,6 +66,7 @@ async fn test_gui_shutdown_lifecycle() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to spawn server");
+    let mut guard = ServerGuard(server_process);
 
     // Give it time to start
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -83,7 +93,7 @@ async fn test_gui_shutdown_lifecycle() {
     let mut is_dead = false;
     for _ in 0..10 {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        match server_process.try_wait() {
+        match guard.0.try_wait() {
             Ok(Some(status)) => {
                 println!("Server exited with: {}", status);
                 is_dead = true;
@@ -92,11 +102,6 @@ async fn test_gui_shutdown_lifecycle() {
             Ok(None) => continue, // Still running
             Err(e) => panic!("Error waiting for process: {}", e),
         }
-    }
-
-    // Killing it manually if it didn't die (cleanup)
-    if !is_dead {
-        let _ = server_process.kill();
     }
 
     // 5. Assert EXPECTED FAILURE (Broken Test)
