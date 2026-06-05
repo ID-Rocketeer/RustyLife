@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # TODO: Remove this transition variable once Node 20 is completely retired on GitHub Actions runners (expected fall 2026)
+  # and the default runner environment natively runs JavaScript actions on Node 24+.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
