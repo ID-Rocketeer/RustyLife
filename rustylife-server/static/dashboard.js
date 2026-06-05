@@ -573,10 +573,10 @@ function updateColorKey() {
     } else if (colorMode === 'tri-state') {
         if (colorKeySubtitle) colorKeySubtitle.innerHTML = 'Time Order: N-2 &rarr; N-1 &rarr; N';
         const tri = serverPalette.tri_state;
-        addColorKeyItem(`rgb(${tri[6][0]},${tri[6][1]},${tri[6][2]})`, "Stable Alive", "🟢 &rarr; 🟢 &rarr; 🟢");
+        addColorKeyItem(`rgb(${tri[3][0]},${tri[3][1]},${tri[3][2]})`, "New Born", "⚫ &rarr; ⚫ &rarr; 🟢");
         addColorKeyItem(`rgb(${tri[5][0]},${tri[5][1]},${tri[5][2]})`, "Surviving", "⚫ &rarr; 🟢 &rarr; 🟢");
         addColorKeyItem(`rgb(${tri[4][0]},${tri[4][1]},${tri[4][2]})`, "Oscillating", "🟢 &rarr; ⚫ &rarr; 🟢");
-        addColorKeyItem(`rgb(${tri[3][0]},${tri[3][1]},${tri[3][2]})`, "New Born", "⚫ &rarr; ⚫ &rarr; 🟢");
+        addColorKeyItem(`rgb(${tri[6][0]},${tri[6][1]},${tri[6][2]})`, "Stable Alive", "🟢 &rarr; 🟢 &rarr; 🟢");
         addColorKeyItem(`rgb(${tri[2][0]},${tri[2][1]},${tri[2][2]})`, "Died Fresh", "🟢 &rarr; 🟢 &rarr; ⚫");
         addColorKeyItem(`rgb(${tri[1][0]},${tri[1][1]},${tri[1][2]})`, "Died Transient", "⚫ &rarr; 🟢 &rarr; ⚫");
         addColorKeyItem(`rgb(${tri[0][0]},${tri[0][1]},${tri[0][2]})`, "Died Faint", "🟢 &rarr; ⚫ &rarr; ⚫");

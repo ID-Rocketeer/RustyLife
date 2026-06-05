@@ -829,10 +829,10 @@ impl eframe::App for RustyLifeApp {
                             );
                             ui.separator();
                             let states = [
-                                (palette.tri_state[6], "Stable Alive", "🟢 → 🟢 → 🟢"),
+                                (palette.tri_state[3], "New Born", "⚫ → ⚫ → 🟢"),
                                 (palette.tri_state[5], "Surviving", "⚫ → 🟢 → 🟢"),
                                 (palette.tri_state[4], "Oscillating", "🟢 → ⚫ → 🟢"),
-                                (palette.tri_state[3], "New Born", "⚫ → ⚫ → 🟢"),
+                                (palette.tri_state[6], "Stable Alive", "🟢 → 🟢 → 🟢"),
                                 (palette.tri_state[2], "Died Fresh", "🟢 → 🟢 → ⚫"),
                                 (palette.tri_state[1], "Died Transient", "⚫ → 🟢 → ⚫"),
                                 (palette.tri_state[0], "Died Faint", "🟢 → ⚫ → ⚫"),
