@@ -91,9 +91,7 @@ fn test_breeder_bounds_regression() {
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(50));
         let bounds = *subscriber.last_bounds.lock().unwrap();
-        if let Some(((_x1, _y1), (_x2, _y2))) = bounds {
-            // Relax constraints to see what's happening
-            assert!(true);
+        if bounds.is_some() {
             success = true;
             break;
         }

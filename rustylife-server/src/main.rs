@@ -1011,26 +1011,24 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
                                         is_ready_for_next_frame = false;
                                     }
                                 }
-                                Some(ClientType::FullSnapshot { viewport }) => {
-                                    if telemetry.generation > last_sent_generation {
-                                        let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                                            data.iter()
-                                                .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
-                                                .copied()
-                                                .collect()
-                                        } else {
-                                            data.iter().copied().collect()
-                                        };
+                                Some(ClientType::FullSnapshot { viewport }) if telemetry.generation > last_sent_generation => {
+                                    let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                                        data.iter()
+                                            .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                                            .copied()
+                                            .collect()
+                                    } else {
+                                        data.iter().copied().collect()
+                                    };
 
-                                        let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
-                                        if socket.send(Message::Binary(payload)).await.is_err() {
-                                            break;
-                                        }
-                                        last_sent_generation = telemetry.generation;
-                                        is_ready_for_next_frame = false;
+                                    let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
+                                    if socket.send(Message::Binary(payload)).await.is_err() {
+                                        break;
                                     }
+                                    last_sent_generation = telemetry.generation;
+                                    is_ready_for_next_frame = false;
                                 }
-                                None => {}
+                                _ => {}
                             }
                         }
                     }
@@ -1176,26 +1174,24 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
                                         is_ready_for_next_frame = false;
                                     }
                                 }
-                                Some(ClientType::FullSnapshot { viewport }) => {
-                                    if telemetry.generation > last_sent_generation {
-                                        let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
-                                            data.iter()
-                                                .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
-                                                .copied()
-                                                .collect()
-                                        } else {
-                                            data.iter().copied().collect()
-                                        };
+                                Some(ClientType::FullSnapshot { viewport }) if telemetry.generation > last_sent_generation => {
+                                    let filtered_cells: Vec<_> = if let Some(((min_x, min_y), (max_x, max_y))) = viewport {
+                                        data.iter()
+                                            .filter(|((x, y), _)| *x >= min_x && *x <= max_x && *y >= min_y && *y <= max_y)
+                                            .copied()
+                                            .collect()
+                                    } else {
+                                        data.iter().copied().collect()
+                                    };
 
-                                        let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
-                                        if writer.write_all(&payload).await.is_err() {
-                                            break;
-                                        }
-                                        last_sent_generation = telemetry.generation;
-                                        is_ready_for_next_frame = false;
+                                    let payload = rustylife_core::encode_binary_packet(telemetry.generation, &filtered_cells, telemetry);
+                                    if writer.write_all(&payload).await.is_err() {
+                                        break;
                                     }
+                                    last_sent_generation = telemetry.generation;
+                                    is_ready_for_next_frame = false;
                                 }
-                                None => {}
+                                _ => {}
                             }
                         }
                     }

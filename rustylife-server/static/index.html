@@ -168,6 +168,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
         }
 
         .canvas-container {
+            position: relative; /* Anchor absolute children */
             flex: 1;
             background: #000000;
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -176,6 +177,91 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             width: 100%;
             display: flex;
             /* Ensures canvas fills container if treated as flex item */
+        }
+
+        .color-key-card {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            width: 290px;
+            background: rgba(17, 24, 39, 0.85); /* Translucent dark background */
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 0.5rem;
+            padding: 0.85rem;
+            z-index: 10;
+            color: #f9fafb;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
+        }
+
+        .color-key-card.hidden {
+            display: none !important;
+        }
+
+        .color-key-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.25rem;
+        }
+
+        .color-key-header h4 {
+            margin: 0;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #3b82f6; /* Accent color */
+        }
+
+        .color-key-card .close-btn {
+            background: transparent;
+            border: none;
+            color: #9ca3af;
+            font-size: 1.1rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .color-key-card .close-btn:hover {
+            color: #f9fafb;
+        }
+
+        .color-key-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.4rem;
+            font-size: 0.75rem;
+        }
+
+        .color-key-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .color-key-swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 0.5rem;
+            flex-shrink: 0;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .color-key-desc {
+            flex: 1;
+            font-weight: 500;
+        }
+
+        .color-key-seq {
+            font-family: monospace;
+            color: #9ca3af;
+            font-size: 0.7rem;
+            margin-left: 0.5rem;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 1px 4px;
+            border-radius: 3px;
         }
 
         canvas {
@@ -294,6 +380,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                     <option value="" disabled selected>Select Pattern...</option>
                 </select>
                 <button id="color-mode-btn" title="Cycle cell presentation mode (Classic -> Bi-State -> Tri-State)">Tri-State</button>
+                <button id="color-key-btn" title="Show color key / legend">?</button>
                 <button id="zoom-in-btn">In</button>
                 <button id="zoom-out-btn">Out</button>
             </div>
@@ -309,6 +396,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
         <div class="canvas-container">
             <canvas id="sim-canvas"></canvas>
+            
+            <div id="color-key-card" class="color-key-card hidden">
+                <div class="color-key-header">
+                    <h4>Color Key</h4>
+                    <button id="color-key-close-btn" class="close-btn">&times;</button>
+                </div>
+                <div id="color-key-subtitle" style="font-size: 0.65rem; color: #9ca3af; margin-bottom: 0.5rem; border-bottom: 1px dashed rgba(255,255,255,0.08); padding-bottom: 0.25rem;"></div>
+                <div id="color-key-items"></div>
+            </div>
         </div>
 
         <div class="footer-container">

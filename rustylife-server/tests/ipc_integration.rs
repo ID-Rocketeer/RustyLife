@@ -108,39 +108,35 @@ async fn test_server_client_tcp_interaction() -> anyhow::Result<()> {
             read_response(&mut reader, &mut buffer, &mut offset),
         )
         .await??;
-        match resp {
-            rustylife_core::Response::BinaryStateHeader {
-                record_count,
-                telemetry,
-                ..
-            } => {
-                let payload_size = (record_count as usize * 33) + 4;
-                while offset < payload_size {
-                    let n = reader.read_buf(&mut buffer).await?;
-                    if n == 0 {
-                        return Err(anyhow::anyhow!("EOF during binary read"));
-                    }
-                    offset += n;
+        if let rustylife_core::Response::BinaryStateHeader {
+            record_count,
+            telemetry,
+            ..
+        } = resp
+        {
+            let payload_size = (record_count as usize * 33) + 4;
+            while offset < payload_size {
+                let n = reader.read_buf(&mut buffer).await?;
+                if n == 0 {
+                    return Err(anyhow::anyhow!("EOF during binary read"));
                 }
-                buffer.drain(0..payload_size);
-                offset -= payload_size;
-
-                if telemetry.generation == 0 {
-                    found_gen_0 = true;
-                    writer
-                        .write_all(&rustylife_core::Request::NextStep.to_bytes())
-                        .await?;
-                } else if telemetry.generation > 0 {
-                    found_next_gen = true;
-                    break;
-                }
-                writer
-                    .write_all(
-                        &rustylife_core::Request::AckPreviousFrame { viewport: None }.to_bytes(),
-                    )
-                    .await?;
+                offset += n;
             }
-            _ => {}
+            buffer.drain(0..payload_size);
+            offset -= payload_size;
+
+            if telemetry.generation == 0 {
+                found_gen_0 = true;
+                writer
+                    .write_all(&rustylife_core::Request::NextStep.to_bytes())
+                    .await?;
+            } else if telemetry.generation > 0 {
+                found_next_gen = true;
+                break;
+            }
+            writer
+                .write_all(&rustylife_core::Request::AckPreviousFrame { viewport: None }.to_bytes())
+                .await?;
         }
     }
 

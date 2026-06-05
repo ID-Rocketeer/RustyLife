@@ -29,6 +29,12 @@ describe('Dashboard Panning & Zooming', () => {
             <button id="quit-btn"></button><select id="pattern-select"></select>
             <button id="zoom-in-btn"></button><button id="zoom-out-btn"></button>
             <button id="color-mode-btn"></button>
+            <button id="color-key-btn"></button>
+            <div id="color-key-card" class="hidden">
+                <button id="color-key-close-btn"></button>
+                <div id="color-key-subtitle"></div>
+                <div id="color-key-items"></div>
+            </div>
             <div id="extent-display"></div><div id="center-display"></div>
             <div id="bounds-display"></div><div id="expanse-display"></div>
             <div id="zoom-display"></div><div id="work-display"></div>
@@ -146,8 +152,7 @@ describe('Dashboard Panning & Zooming', () => {
         await new Promise(r => setTimeout(r, 10));
 
         const colorModeBtn = document.getElementById('color-mode-btn');
-        // Initial mode is Tri-State: button has label 'Tri-State' and is selected
-        expect(colorModeBtn.classList.contains('selected')).toBe(true);
+        // Initial mode is Tri-State: button has label 'Tri-State'
         expect(colorModeBtn.innerText).toBe('Tri-State');
 
         // Define a state helper with 1 cell at coordinate (10, 10)
@@ -177,7 +182,6 @@ describe('Dashboard Panning & Zooming', () => {
 
         // Toggle to Classic mode
         colorModeBtn.click();
-        expect(colorModeBtn.classList.contains('selected')).toBe(true);
         expect(colorModeBtn.innerText).toBe('Classic');
 
         // Classic mode rerenders cell with state 4 (currently alive) -> White
@@ -185,7 +189,6 @@ describe('Dashboard Panning & Zooming', () => {
 
         // Toggle to Bi-State mode
         colorModeBtn.click();
-        expect(colorModeBtn.classList.contains('selected')).toBe(false);
         expect(colorModeBtn.innerText).toBe('Bi-State');
 
         // Bi-State mode rerenders cell with state 4 (Born) -> Green
@@ -193,7 +196,6 @@ describe('Dashboard Panning & Zooming', () => {
 
         // Toggle to Tri-State mode
         colorModeBtn.click();
-        expect(colorModeBtn.classList.contains('selected')).toBe(true);
         expect(colorModeBtn.innerText).toBe('Tri-State');
 
         // Tri-state mode with state 2 (Dying) -> Pinkish-Red
@@ -203,7 +205,6 @@ describe('Dashboard Panning & Zooming', () => {
 
         // Toggle back to Classic mode
         colorModeBtn.click();
-        expect(colorModeBtn.classList.contains('selected')).toBe(true);
         expect(colorModeBtn.innerText).toBe('Classic');
 
         // Classic mode: send cell with state 4 -> White

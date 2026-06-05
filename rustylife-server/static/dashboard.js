@@ -27,6 +27,11 @@ const patternSelect = /** @type {HTMLSelectElement} */ (document.getElementById(
 const zoomInBtn = /** @type {HTMLButtonElement} */ (document.getElementById('zoom-in-btn'));
 const zoomOutBtn = /** @type {HTMLButtonElement} */ (document.getElementById('zoom-out-btn'));
 const colorModeBtn = /** @type {HTMLButtonElement} */ (document.getElementById('color-mode-btn'));
+const colorKeyBtn = /** @type {HTMLButtonElement} */ (document.getElementById('color-key-btn'));
+const colorKeyCard = /** @type {HTMLDivElement} */ (document.getElementById('color-key-card'));
+const colorKeyCloseBtn = /** @type {HTMLButtonElement} */ (document.getElementById('color-key-close-btn'));
+const colorKeySubtitle = /** @type {HTMLDivElement} */ (document.getElementById('color-key-subtitle'));
+const colorKeyItems = /** @type {HTMLDivElement} */ (document.getElementById('color-key-items'));
 
 const extentEl = /** @type {HTMLSpanElement} */ (document.getElementById('extent-display'));
 const centerEl = /** @type {HTMLSpanElement} */ (document.getElementById('center-display'));
@@ -84,7 +89,6 @@ let lastMouseY = 0;
 let latestTelemetry = null;
 let colorMode = 'tri-state';
 colorModeBtn.innerText = 'Tri-State';
-colorModeBtn.classList.add('selected');
 
 function uiLoop() {
     if (latestTelemetry) {
@@ -383,6 +387,7 @@ function connect() {
 
             if (header.payload.palette) {
                 serverPalette = header.payload.palette;
+                updateColorKey();
             }
 
             // Populate Patterns
@@ -528,16 +533,77 @@ colorModeBtn.onclick = () => {
 
     colorModeBtn.innerText = colorMode === 'classic' ? 'Classic' : (colorMode === 'bi-state' ? 'Bi-State' : 'Tri-State');
 
-    if (colorMode !== 'bi-state') {
-        colorModeBtn.classList.add('selected');
-    } else {
-        colorModeBtn.classList.remove('selected');
-    }
-
     if (lastState) {
         renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
     }
+    updateColorKey();
 };
+
+if (colorKeyBtn) {
+    colorKeyBtn.onclick = () => {
+        if (colorKeyCard) colorKeyCard.classList.toggle('hidden');
+        updateColorKey();
+    };
+}
+
+if (colorKeyCloseBtn) {
+    colorKeyCloseBtn.onclick = () => {
+        if (colorKeyCard) colorKeyCard.classList.add('hidden');
+    };
+}
+
+function updateColorKey() {
+    if (!colorKeyItems) return;
+    colorKeyItems.innerHTML = '';
+
+    if (colorMode === 'classic') {
+        if (colorKeySubtitle) colorKeySubtitle.innerHTML = 'Time Order: N (Current)';
+        const rgb = serverPalette.classic;
+        const colorStr = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+        addColorKeyItem(colorStr, "Alive", "🟢");
+    } else if (colorMode === 'bi-state') {
+        if (colorKeySubtitle) colorKeySubtitle.innerHTML = 'Time Order: N-1 &rarr; N';
+        const rgbAlive = serverPalette.bi_state[0];
+        const rgbBorn = serverPalette.bi_state[1];
+        const rgbDying = serverPalette.bi_state[2];
+
+        addColorKeyItem(`rgb(${rgbAlive[0]},${rgbAlive[1]},${rgbAlive[2]})`, "Surviving", "🟢 &rarr; 🟢");
+        addColorKeyItem(`rgb(${rgbBorn[0]},${rgbBorn[1]},${rgbBorn[2]})`, "New Born", "⚫ &rarr; 🟢");
+        addColorKeyItem(`rgb(${rgbDying[0]},${rgbDying[1]},${rgbDying[2]})`, "Dying", "🟢 &rarr; ⚫");
+    } else if (colorMode === 'tri-state') {
+        if (colorKeySubtitle) colorKeySubtitle.innerHTML = 'Time Order: N-2 &rarr; N-1 &rarr; N';
+        const tri = serverPalette.tri_state;
+        addColorKeyItem(`rgb(${tri[6][0]},${tri[6][1]},${tri[6][2]})`, "Stable Alive", "🟢 &rarr; 🟢 &rarr; 🟢");
+        addColorKeyItem(`rgb(${tri[5][0]},${tri[5][1]},${tri[5][2]})`, "Surviving", "⚫ &rarr; 🟢 &rarr; 🟢");
+        addColorKeyItem(`rgb(${tri[4][0]},${tri[4][1]},${tri[4][2]})`, "Oscillating", "🟢 &rarr; ⚫ &rarr; 🟢");
+        addColorKeyItem(`rgb(${tri[3][0]},${tri[3][1]},${tri[3][2]})`, "New Born", "⚫ &rarr; ⚫ &rarr; 🟢");
+        addColorKeyItem(`rgb(${tri[2][0]},${tri[2][1]},${tri[2][2]})`, "Died Fresh", "🟢 &rarr; 🟢 &rarr; ⚫");
+        addColorKeyItem(`rgb(${tri[1][0]},${tri[1][1]},${tri[1][2]})`, "Died Transient", "⚫ &rarr; 🟢 &rarr; ⚫");
+        addColorKeyItem(`rgb(${tri[0][0]},${tri[0][1]},${tri[0][2]})`, "Died Faint", "🟢 &rarr; ⚫ &rarr; ⚫");
+    }
+}
+
+function addColorKeyItem(color, desc, seq) {
+    const item = document.createElement('div');
+    item.className = 'color-key-item';
+
+    const swatch = document.createElement('div');
+    swatch.className = 'color-key-swatch';
+    swatch.style.backgroundColor = color;
+
+    const descEl = document.createElement('span');
+    descEl.className = 'color-key-desc';
+    descEl.innerText = desc;
+
+    const seqEl = document.createElement('span');
+    seqEl.className = 'color-key-seq';
+    seqEl.innerHTML = seq;
+
+    item.appendChild(swatch);
+    item.appendChild(descEl);
+    item.appendChild(seqEl);
+    colorKeyItems.appendChild(item);
+}
 
 window.addEventListener('keydown', (e) => {
     if (e.key === '+' || e.key === '=') updateZoom(1);

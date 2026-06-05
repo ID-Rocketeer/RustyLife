@@ -47,6 +47,7 @@ pub struct RustyLifeApp {
 
     // Cell presentation color mode
     pub(crate) color_mode: ColorMode,
+    pub(crate) show_color_key: bool,
 }
 
 impl RustyLifeApp {
@@ -66,6 +67,7 @@ impl RustyLifeApp {
             shutdown_rx,
             first_frame: true,
             color_mode: ColorMode::TriState,
+            show_color_key: false,
         }
     }
 }
@@ -311,6 +313,20 @@ impl eframe::App for RustyLifeApp {
                                     ColorMode::BiState => ColorMode::TriState,
                                     ColorMode::TriState => ColorMode::Classic,
                                 };
+                            }
+
+                            // Color Key / Legend Toggle Button
+                            let key_btn = egui::Button::new(
+                                egui::RichText::new("?").size(15.0).strong(),
+                            )
+                            .min_size(Vec2::new(0.0, btn_h));
+
+                            if ui
+                                .add_sized([30.0, btn_h], key_btn)
+                                .on_hover_text("Show Color Key / Legend")
+                                .clicked()
+                            {
+                                self.show_color_key = !self.show_color_key;
                             }
 
                             if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
@@ -750,6 +766,94 @@ impl eframe::App for RustyLifeApp {
                     }
                 });
         });
+
+        if self.show_color_key {
+            let mut open = self.show_color_key;
+            egui::Window::new("Color Key")
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| match self.color_mode {
+                        ColorMode::Classic => {
+                            ui.label(
+                                egui::RichText::new("Time Order: N (Current)")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                draw_swatch(ui, palette.classic);
+                                ui.label("Alive");
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.monospace("🟢");
+                                    },
+                                );
+                            });
+                        }
+                        ColorMode::BiState => {
+                            ui.label(
+                                egui::RichText::new("Time Order: N-1 → N")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                            ui.separator();
+                            let states = [
+                                (palette.bi_state[0], "Surviving", "🟢 → 🟢"),
+                                (palette.bi_state[1], "New Born", "⚫ → 🟢"),
+                                (palette.bi_state[2], "Dying", "🟢 → ⚫"),
+                            ];
+                            for (col, label, seq) in states {
+                                ui.horizontal(|ui| {
+                                    draw_swatch(ui, col);
+                                    ui.label(label);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.monospace(seq);
+                                        },
+                                    );
+                                });
+                            }
+                        }
+                        ColorMode::TriState => {
+                            ui.label(
+                                egui::RichText::new("Time Order: N-2 → N-1 → N")
+                                    .size(11.0)
+                                    .strong()
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                            ui.separator();
+                            let states = [
+                                (palette.tri_state[6], "Stable Alive", "🟢 → 🟢 → 🟢"),
+                                (palette.tri_state[5], "Surviving", "⚫ → 🟢 → 🟢"),
+                                (palette.tri_state[4], "Oscillating", "🟢 → ⚫ → 🟢"),
+                                (palette.tri_state[3], "New Born", "⚫ → ⚫ → 🟢"),
+                                (palette.tri_state[2], "Died Fresh", "🟢 → 🟢 → ⚫"),
+                                (palette.tri_state[1], "Died Transient", "⚫ → 🟢 → ⚫"),
+                                (palette.tri_state[0], "Died Faint", "🟢 → ⚫ → ⚫"),
+                            ];
+                            for (col, label, seq) in states {
+                                ui.horizontal(|ui| {
+                                    draw_swatch(ui, col);
+                                    ui.label(label);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.monospace(seq);
+                                        },
+                                    );
+                                });
+                            }
+                        }
+                    });
+                });
+            self.show_color_key = open;
+        }
     }
 }
 
@@ -910,6 +1014,15 @@ impl egui::Widget for MediaButton {
         }
         response
     }
+}
+
+fn draw_swatch(ui: &mut egui::Ui, rgb: [u8; 3]) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        2.0, // rounding
+        egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+    );
 }
 
 #[cfg(test)]

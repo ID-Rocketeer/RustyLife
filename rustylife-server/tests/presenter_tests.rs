@@ -48,7 +48,7 @@ impl EngineSubscriber for PresenterSubscriber {
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let packet_data =
-            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry.clone());
+            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry);
         if let Ok(packet) = rustylife_core::decode_binary_packet(&packet_data) {
             let mut presenter = self.presenter.lock().unwrap();
             presenter.update_state(packet, telemetry);

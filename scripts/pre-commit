@@ -8,7 +8,7 @@ if ! cargo fmt -- --check; then
 fi
 
 echo "[pre-commit] Checking Rust Lints..."
-if ! cargo clippy -- -D warnings; then
+if ! cargo clippy --all-targets -- -D warnings; then
     echo "[pre-commit] Cargo clippy failed. Commit aborted."
     exit 1
 fi

@@ -44,12 +44,7 @@ fn test_gps_data_integrity() {
     std::thread::sleep(Duration::from_millis(500));
     engine.stop();
 
-    let telemetry = tracker
-        .0
-        .lock()
-        .unwrap()
-        .clone()
-        .expect("Should have received telemetry");
+    let telemetry = (*tracker.0.lock().unwrap()).expect("Should have received telemetry");
 
     // Convert to binary packet to test serialization
     let payload = rustylife_core::encode_binary_packet(telemetry.generation, &[], telemetry);

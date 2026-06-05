@@ -78,7 +78,8 @@ async fn test_websocket_protocol_handshake() {
         while let Some(msg) = read.next().await {
             let msg = msg.expect("Error reading message");
             if let Message::Binary(data) = msg {
-                if let Ok((Response::Welcome { .. }, _)) = Response::from_bytes(&data) {
+                let parsed = Response::from_bytes(&data);
+                if let Ok((Response::Welcome { .. }, _)) = parsed {
                     found_welcome = true;
                     break;
                 }
@@ -99,17 +100,13 @@ async fn test_websocket_protocol_handshake() {
         while let Some(msg) = read.next().await {
             let msg = msg.expect("Error reading message");
             if let Message::Binary(data) = msg {
-                if let Ok((response, _)) = Response::from_bytes(&data) {
-                    match response {
-                        Response::BinaryStateHeader { telemetry, .. } => {
-                            println!(
-                                "Received BinaryStateHeader for Gen {}",
-                                telemetry.generation
-                            );
-                            return; // Success!
-                        }
-                        _ => {}
-                    }
+                let parsed = Response::from_bytes(&data);
+                if let Ok((Response::BinaryStateHeader { telemetry, .. }, _)) = parsed {
+                    println!(
+                        "Received BinaryStateHeader for Gen {}",
+                        telemetry.generation
+                    );
+                    return; // Success!
                 }
             }
         }

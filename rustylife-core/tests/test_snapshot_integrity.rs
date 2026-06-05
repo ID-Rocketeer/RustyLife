@@ -32,7 +32,7 @@ impl EngineSubscriber for IntegritySubscriber {
         telemetry: rustylife_core::Telemetry,
     ) -> bool {
         let packet_data =
-            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry.clone());
+            rustylife_core::encode_binary_packet(telemetry.generation, &data, telemetry);
         if let Err(e) = rustylife_core::decode_binary_packet(&packet_data) {
             eprintln!(
                 "\n!!! DECODE FAILURE at Gen {}: {} !!!\n",
