@@ -30,6 +30,7 @@ pub struct AppState {
     pub patterns: Vec<rustylife_core::PatternInfo>,
     pub bounds: Option<((i128, i128), (i128, i128))>,
     pub repaint_ctx: Option<egui::Context>,
+    pub palette: rustylife_core::ColorPalette,
 }
 
 impl Default for AppState {
@@ -48,6 +49,7 @@ impl Default for AppState {
             patterns: Vec::new(),
             bounds: None,
             repaint_ctx: None,
+            palette: rustylife_core::ColorPalette::default(),
         }
     }
 }

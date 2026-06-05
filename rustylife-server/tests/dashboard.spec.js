@@ -170,46 +170,46 @@ describe('Dashboard Panning & Zooming', () => {
             return buffer;
         };
 
-        // Render first time in Tri-State mode: state 4 (Born) -> Blue (#0000FF)
+        // Render first time in Tri-State mode: state 4 (Born) -> Green
         wsInstance.onmessage({ data: makeStatePacket(4) });
         await new Promise(r => setTimeout(r, 10));
-        expect(mockCtx.fillStyle).toBe('#0000FF');
+        expect(mockCtx.fillStyle).toBe('rgb(0,255,0)');
 
         // Toggle to Classic mode
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(true);
         expect(colorModeBtn.innerText).toBe('Classic');
 
-        // Classic mode rerenders cell with state 4 (currently alive) -> Green (#00FF00)
-        expect(mockCtx.fillStyle).toBe('#00FF00');
+        // Classic mode rerenders cell with state 4 (currently alive) -> White
+        expect(mockCtx.fillStyle).toBe('rgb(255,255,255)');
 
         // Toggle to Bi-State mode
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(false);
         expect(colorModeBtn.innerText).toBe('Bi-State');
 
-        // Bi-State mode rerenders cell with state 4 (Born) -> Blue (#0000FF)
-        expect(mockCtx.fillStyle).toBe('#0000FF');
+        // Bi-State mode rerenders cell with state 4 (Born) -> Green
+        expect(mockCtx.fillStyle).toBe('rgb(0,255,0)');
 
         // Toggle to Tri-State mode
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(true);
         expect(colorModeBtn.innerText).toBe('Tri-State');
 
-        // Tri-state mode with state 2 (Dying) -> Orange (#FF8000)
+        // Tri-state mode with state 2 (Dying) -> Pinkish-Red
         wsInstance.onmessage({ data: makeStatePacket(2) });
         await new Promise(r => setTimeout(r, 10));
-        expect(mockCtx.fillStyle).toBe('#FF8000');
+        expect(mockCtx.fillStyle).toBe('rgb(255,0,128)');
 
         // Toggle back to Classic mode
         colorModeBtn.click();
         expect(colorModeBtn.classList.contains('selected')).toBe(true);
         expect(colorModeBtn.innerText).toBe('Classic');
 
-        // Classic mode: send cell with state 4 -> Green (#00FF00)
+        // Classic mode: send cell with state 4 -> White
         wsInstance.onmessage({ data: makeStatePacket(4) });
         await new Promise(r => setTimeout(r, 10));
-        expect(mockCtx.fillStyle).toBe('#00FF00');
+        expect(mockCtx.fillStyle).toBe('rgb(255,255,255)');
     });
 
     describe('Layout Width Constraints', () => {

@@ -247,7 +247,24 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                     patterns: [
                         { name: 'Blinker', description: 'Test pattern' },
                         { name: 'Glider', description: 'Test pattern 2' }
-                    ]
+                    ],
+                    palette: {
+                        classic: [255, 255, 255],
+                        bi_state: [
+                            [0, 0, 255],
+                            [0, 255, 0],
+                            [255, 0, 0]
+                        ],
+                        tri_state: [
+                            [255, 0, 0],
+                            [255, 0, 128],
+                            [255, 0, 255],
+                            [0, 255, 0],
+                            [0, 255, 128],
+                            [0, 255, 255],
+                            [0, 0, 255]
+                        ]
+                    }
                 }
             };
 

@@ -137,6 +137,7 @@ impl eframe::App for RustyLifeApp {
             cores,
             bounds,
             expanse,
+            palette,
         ) = {
             let s = self.state.lock().unwrap();
             (
@@ -151,6 +152,7 @@ impl eframe::App for RustyLifeApp {
                 s.cores,
                 s.bounds,
                 s.expanse(),
+                s.palette.clone(),
             )
         };
 
@@ -677,29 +679,36 @@ impl eframe::App for RustyLifeApp {
                         let color = match self.color_mode {
                             ColorMode::Classic => {
                                 if (state & 4) != 0 {
-                                    egui::Color32::from_rgb(0, 255, 0)
+                                    egui::Color32::from_rgb(
+                                        palette.classic[0],
+                                        palette.classic[1],
+                                        palette.classic[2],
+                                    )
                                 } else {
                                     continue;
                                 }
                             }
-                            ColorMode::BiState => {
-                                match state & 6 {
-                                    6 => egui::Color32::from_rgb(0, 255, 0), // Alive (Green)
-                                    4 => egui::Color32::from_rgb(0, 0, 255), // Born (Blue)
-                                    2 => egui::Color32::from_rgb(255, 0, 0), // Dying (Red)
-                                    _ => continue,
+                            ColorMode::BiState => match state & 6 {
+                                6 => {
+                                    let c = palette.bi_state[0];
+                                    egui::Color32::from_rgb(c[0], c[1], c[2])
                                 }
-                            }
+                                4 => {
+                                    let c = palette.bi_state[1];
+                                    egui::Color32::from_rgb(c[0], c[1], c[2])
+                                }
+                                2 => {
+                                    let c = palette.bi_state[2];
+                                    egui::Color32::from_rgb(c[0], c[1], c[2])
+                                }
+                                _ => continue,
+                            },
                             ColorMode::TriState => {
-                                match state {
-                                    1 => egui::Color32::from_rgb(255, 0, 0),   // Red
-                                    2 => egui::Color32::from_rgb(255, 128, 0), // Orange
-                                    3 => egui::Color32::from_rgb(255, 255, 0), // Yellow
-                                    4 => egui::Color32::from_rgb(0, 0, 255),   // Blue
-                                    5 => egui::Color32::from_rgb(0, 128, 255), // Light Blue
-                                    6 => egui::Color32::from_rgb(0, 255, 255), // Cyan
-                                    7 => egui::Color32::from_rgb(0, 255, 0),   // Green
-                                    _ => continue,
+                                if (1..=7).contains(&state) {
+                                    let c = palette.tri_state[(state - 1) as usize];
+                                    egui::Color32::from_rgb(c[0], c[1], c[2])
+                                } else {
+                                    continue;
                                 }
                             }
                         };

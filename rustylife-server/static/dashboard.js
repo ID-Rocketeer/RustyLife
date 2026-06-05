@@ -43,6 +43,25 @@ const statusText = /** @type {HTMLSpanElement} */ (document.getElementById('stat
 const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('sim-canvas'));
 const ctx = canvas.getContext('2d');
 
+const defaultPalette = {
+    classic: [255, 255, 255],
+    bi_state: [
+        [0, 0, 255],
+        [0, 255, 0],
+        [255, 0, 0]
+    ],
+    tri_state: [
+        [255, 0, 0],
+        [255, 0, 128],
+        [255, 0, 255],
+        [0, 255, 0],
+        [0, 255, 128],
+        [0, 255, 255],
+        [0, 0, 255]
+    ]
+};
+let serverPalette = defaultPalette;
+
 let socket;
 let scale = 4; // Initial zoom: 4 pixels per cell (Range: 1-16)
 let isRunning = false;
@@ -209,27 +228,26 @@ function renderCellsHybrid(meta, dataView, binaryOffset, forceRender = false) {
         let color;
         if (colorMode === 'classic') {
             if ((state & 4) !== 0) {
-                color = '#00FF00';
+                const rgb = serverPalette.classic;
+                color = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
             } else {
                 continue;
             }
         } else if (colorMode === 'bi-state') {
+            let rgb;
             switch (state & 6) {
-                case 6: color = '#00FF00'; break; // Alive (Green)
-                case 4: color = '#0000FF'; break; // Born (Blue)
-                case 2: color = '#FF0000'; break; // Dying (Red)
+                case 6: rgb = serverPalette.bi_state[0]; break; // Alive
+                case 4: rgb = serverPalette.bi_state[1]; break; // Born
+                case 2: rgb = serverPalette.bi_state[2]; break; // Dying
                 default: continue;
             }
+            color = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
         } else if (colorMode === 'tri-state') {
-            switch (state) {
-                case 1: color = '#FF0000'; break;
-                case 2: color = '#FF8000'; break;
-                case 3: color = '#FFFF00'; break;
-                case 4: color = '#0000FF'; break;
-                case 5: color = '#0080FF'; break;
-                case 6: color = '#00FFFF'; break;
-                case 7: color = '#00FF00'; break;
-                default: continue;
+            if (state >= 1 && state <= 7) {
+                const rgb = serverPalette.tri_state[state - 1];
+                color = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+            } else {
+                continue;
             }
         } else {
             continue;
@@ -362,6 +380,10 @@ function connect() {
         if (header.type === "Welcome") {
             const cores = header.payload.cores;
             coresEl.innerHTML = `[ ${String(cores).padStart(2, '0')} ]`;
+
+            if (header.payload.palette) {
+                serverPalette = header.payload.palette;
+            }
 
             // Populate Patterns
             if (header.payload.patterns) {

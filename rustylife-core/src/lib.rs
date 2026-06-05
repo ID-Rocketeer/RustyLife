@@ -95,6 +95,40 @@ impl Telemetry {
     }
 }
 
+/// Color palette settings for cell state representations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../rustylife-server/static/types/")]
+pub struct ColorPalette {
+    /// Classic/Mono-color alive cell color [r, g, b]
+    pub classic: [u8; 3],
+    /// Bi-state colors: [alive, born, dying] each as [r, g, b]
+    pub bi_state: [[u8; 3]; 3],
+    /// Tri-state colors: states 1 through 7 each as [r, g, b]
+    pub tri_state: [[u8; 3]; 7],
+}
+
+impl Default for ColorPalette {
+    fn default() -> Self {
+        Self {
+            classic: [255, 255, 255], // White
+            bi_state: [
+                [0, 0, 255], // Alive (Blue)
+                [0, 255, 0], // Born (Green)
+                [255, 0, 0], // Dying (Red)
+            ],
+            tri_state: [
+                [255, 0, 0],   // State 1: Red
+                [255, 0, 255], // State 2: Magenta
+                [128, 0, 255], // State 3: Deep Purple
+                [0, 255, 0],   // State 4: Green
+                [0, 128, 255], // State 5: Azure
+                [0, 255, 255], // State 6: Cyan
+                [0, 0, 255],   // State 7: Blue
+            ],
+        }
+    }
+}
+
 /// Represents a response from the simulation server to a client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../rustylife-server/static/types/")]
@@ -116,6 +150,8 @@ pub enum Response {
         cores: usize,
         #[serde(default)]
         patterns: Vec<PatternInfo>,
+        #[serde(default)]
+        palette: ColorPalette,
     },
     /// A header indicates a binary payload follows.
     /// Redundant metrics stripped to enforce SnapshotAvailable as single source of truth.
