@@ -6,4 +6,4 @@ import type { Telemetry } from "./Telemetry";
 /**
  * Represents a response from the simulation server to a client.
  */
-export type Response = { "type": "Ok" } | { "type": "SnapshotAvailable", "payload": { telemetry: Telemetry, } } | { "type": "TelemetryBundle", "payload": { telemetry: Array<Telemetry>, } } | { "type": "Error", "payload": string } | { "type": "Welcome", "payload": { cores: number, patterns: Array<PatternInfo>, palette: ColorPalette, } } | { "type": "BinaryStateHeader", "payload": { generation: bigint, record_count: bigint, telemetry: Telemetry, } };
+export type Response = { "type": "Ok" } | { "type": "SnapshotAvailable", "payload": { telemetry: Telemetry, } } | { "type": "TelemetryBundle", "payload": { telemetry: Array<Telemetry>, } } | { "type": "Error", "payload": string } | { "type": "Welcome", "payload": { cores: number, patterns: Array<PatternInfo>, palette: ColorPalette, states: number, } } | { "type": "BinaryStateHeader", "payload": { generation: bigint, record_count: bigint, telemetry: Telemetry, } };

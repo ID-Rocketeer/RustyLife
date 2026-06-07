@@ -17,7 +17,7 @@ use rustylife_core::block_tree::BlockTree;
 
 #[test]
 fn test_block_tree_bounds() {
-    let mut tree = BlockTree::new();
+    let mut tree = BlockTree::<4>::new();
 
     // 1. Empty tree -> None
     assert!(tree.bounds(1).is_none());

@@ -25,12 +25,12 @@ use std::sync::RwLock;
 ///
 /// Each bucket contains a binary search tree (BlockTree) of 8x8 blocks, allowing
 /// for efficient lookup and concurrent access.
-pub struct SparseStorage {
+pub struct SparseStorage<const N: usize = 4> {
     /// The collection of cell buckets.
-    pub buckets: Box<[RwLock<BlockTree>]>,
+    pub buckets: Box<[RwLock<BlockTree<N>>]>,
 }
 
-impl SparseStorage {
+impl<const N: usize> SparseStorage<N> {
     pub fn new(bucket_count: usize) -> Self {
         let buckets = (0..bucket_count)
             .map(|_| RwLock::new(BlockTree::new()))
@@ -46,12 +46,14 @@ impl SparseStorage {
         let by = coords.1 >> 3;
         let idx = hash_coordinates(bx, by, self.buckets.len());
 
-        // Insert into specific masks based on the Cell's state
-        // We only write Alive cells to preserve existing state in other masks?
-        // Or we overwrite? Using 'write Alive only' is safer for additive seeding.
         let mut tree = self.buckets[idx].write().unwrap_or_else(|e| e.into_inner());
 
-        for &mask in &[1, 2, 4, 8] {
+        let masks: &[usize] = match N {
+            2 => &[1, 2],
+            3 => &[1, 2, 4],
+            _ => &[1, 2, 4, 8],
+        };
+        for &mask in masks {
             if cell.state(mask) == CellState::Alive {
                 tree.set_cell(coords.0, coords.1, mask, CellState::Alive);
             }
@@ -137,8 +139,7 @@ impl SparseStorage {
         writer: &mut impl Write,
         hasher: &mut crc32fast::Hasher,
     ) -> std::io::Result<()> {
-        // We reuse a vector buffer to minimize allocations per bucket
-        let mut buffer = Vec::new(); // Reused inner buffer? No, collect_cells expects &mut Vec
+        let mut buffer = Vec::new();
 
         for bucket in self.buckets.iter() {
             buffer.clear();
@@ -164,7 +165,7 @@ impl SparseStorage {
         Ok(())
     }
 
-    pub fn get_bucket_mut(&mut self, idx: usize) -> &mut BlockTree {
+    pub fn get_bucket_mut(&mut self, idx: usize) -> &mut BlockTree<N> {
         self.buckets[idx].get_mut().unwrap()
     }
 
@@ -189,74 +190,80 @@ impl SparseStorage {
     where
         F: FnOnce(&mut Cell) -> R,
     {
-        // Determine bucket using BLOCK coordinates
         let bx = x >> 3;
         let by = y >> 3;
         let idx = hash_coordinates(bx, by, self.buckets.len());
 
-        // We need write lock to allow mutation if 'f' modifies the cell
         let mut tree = self.buckets[idx].write().unwrap_or_else(|e| e.into_inner());
 
-        // Reconstruct cell state from all 4 masks/phases to match legacy behavior
         let s1 = tree.get_cell(x, y, 1);
-        let s2 = tree.get_cell(x, y, 2);
-        let s4 = tree.get_cell(x, y, 4);
-        let s8 = tree.get_cell(x, y, 8);
-
-        // We initialize with mask 1's state, but we need to ensure the Cell instance
-        // reflects the full history if possible, or at least allows us to write back to all.
-        // Since we can't easily inject `state_transitions` (private), we construct
-        // and force-set state for other masks.
+        let s2 = if N >= 2 {
+            tree.get_cell(x, y, 2)
+        } else {
+            CellState::Dead
+        };
+        let s4 = if N >= 3 {
+            tree.get_cell(x, y, 4)
+        } else {
+            CellState::Dead
+        };
+        let s8 = if N >= 4 {
+            tree.get_cell(x, y, 8)
+        } else {
+            CellState::Dead
+        };
 
         let mut cell = Cell::new(x, y, s1, 1);
 
-        // Propagate other states if they differ from what `new(..., 1)` set.
-        // `Cell::new(..., 1)` sets bit 1 based on s1.
-        // We need to set bit 2 based on s2, bit 4 based on s4, bit 8 based on s8.
-        if s2 == CellState::Alive {
+        if N >= 2 && s2 == CellState::Alive {
             cell.set_state_at(2, CellState::Alive);
         } else {
             cell.set_state_at(2, CellState::Dead);
         }
 
-        if s4 == CellState::Alive {
+        if N >= 3 && s4 == CellState::Alive {
             cell.set_state_at(4, CellState::Alive);
         } else {
             cell.set_state_at(4, CellState::Dead);
         }
 
-        if s8 == CellState::Alive {
+        if N >= 4 && s8 == CellState::Alive {
             cell.set_state_at(8, CellState::Alive);
         } else {
             cell.set_state_at(8, CellState::Dead);
         }
 
-        // Execute closure
         let result = f(&mut cell);
 
-        // Write back all states
-        // This ensures that if the test modifies any generation state, it is persisted.
         tree.set_cell(x, y, 1, cell.state(1));
-        tree.set_cell(x, y, 2, cell.state(2));
-        tree.set_cell(x, y, 4, cell.state(4));
-        tree.set_cell(x, y, 8, cell.state(8));
+        if N >= 2 {
+            tree.set_cell(x, y, 2, cell.state(2));
+        }
+        if N >= 3 {
+            tree.set_cell(x, y, 4, cell.state(4));
+        }
+        if N >= 4 {
+            tree.set_cell(x, y, 8, cell.state(8));
+        }
 
         Some(result)
     }
 }
 
+pub type SimulationSpace = Space<4>;
+
 /// A high-level representation of the simulation grid.
 ///
-/// `SimulationSpace` coordinates cell storage and simulation mask management.
+/// `Space` coordinates cell storage and simulation mask management.
 /// It uses interior mutability to allow concurrent access during controlled
 /// simulation phases.
-pub struct SimulationSpace {
+pub struct Space<const N: usize = 4> {
     /// The global simulation masks governing state transitions.
-    pub mask: SimulationMasks,
-    storage: UnsafeCell<SparseStorage>,
+    pub mask: SimulationMasks<N>,
+    storage: UnsafeCell<SparseStorage<N>>,
 }
 
-impl SimulationSpace {
+impl<const N: usize> Space<N> {
     pub fn new(bucket_count: usize) -> Self {
         Self {
             mask: SimulationMasks::new(),
@@ -264,7 +271,7 @@ impl SimulationSpace {
         }
     }
 
-    pub fn storage(&self) -> &SparseStorage {
+    pub fn storage(&self) -> &SparseStorage<N> {
         unsafe { &*self.storage.get() }
     }
 
@@ -326,7 +333,7 @@ impl SimulationSpace {
 
     // seed_from_rle removed (duplicate)
 
-    pub fn storage_raw(&self) -> *mut SparseStorage {
+    pub fn storage_raw(&self) -> *mut SparseStorage<N> {
         self.storage.get()
     }
 
@@ -334,12 +341,12 @@ impl SimulationSpace {
     /// Must only be called during a gated phase where no other thread
     /// is accessing the storage.
     #[allow(clippy::mut_from_ref)]
-    pub unsafe fn storage_mut(&self) -> &mut SparseStorage {
+    pub unsafe fn storage_mut(&self) -> &mut SparseStorage<N> {
         unsafe { &mut *self.storage.get() }
     }
 
     /// Aquires a shared read lock for the space.
-    pub fn read(&self) -> MaskGuard<'_> {
+    pub fn read(&self) -> MaskGuard<'_, N> {
         self.mask.read()
     }
 
@@ -636,7 +643,7 @@ impl SimulationSpace {
 
 // SAFETY: SimulationSpace is Sync because all concurrent access to the UnsafeCell<SparseStorage>
 // is coordinated via the engine's phase barriers, ensuring no write-read or write-write overlaps.
-unsafe impl Sync for SimulationSpace {}
+unsafe impl<const N: usize> Sync for Space<N> {}
 
 #[cfg(test)]
 mod tests {
@@ -645,8 +652,8 @@ mod tests {
 
     #[test]
     fn test_sparse_storage_parallel_traits() {
-        let storage = SparseStorage::new(crate::BUCKET_COUNT);
-        let manager = SimulationMasks::new();
+        let storage = SparseStorage::<4>::new(crate::BUCKET_COUNT);
+        let manager = SimulationMasks::<4>::new();
         let guard = manager.read();
 
         // We can now insert with a shared reference!

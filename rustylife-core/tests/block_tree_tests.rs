@@ -20,7 +20,7 @@ mod tests {
 
     #[test]
     fn test_block8x8_basic() {
-        let mut block = Block8x8::new();
+        let mut block = Block8x8::<4>::new();
         // Mask 1 -> Index 0
         block.set_bit(0, 0, 0, true);
         block.set_bit(7, 7, 0, true);
@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn test_block_tree_integration() {
-        let mut tree = BlockTree::new();
+        let mut tree = BlockTree::<4>::new();
         let mask1 = 1; // 001
 
         // Origin
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_simd_step() {
-        let mut block = Block8x8::new();
+        let mut block = Block8x8::<4>::new();
         // Blinker pattern (Vertical line of 3)
         // Center: (1, 1), (1, 2), (1, 3)
         // Note: Block local coords are 0-7.
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn test_allocation_growth() {
         use rustylife_core::block_tree::BlockArena;
-        let mut arena = BlockArena::new();
+        let mut arena = BlockArena::<4>::new();
         // Initial capacity is 1024
         assert_eq!(arena.nodes.capacity(), 1024);
 

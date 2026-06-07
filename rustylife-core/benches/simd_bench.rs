@@ -54,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
     let mut cells_array: [Cell; 64] = cells.try_into().unwrap();
 
-    let mut block = Block8x8::new();
+    let mut block = Block8x8::<4>::new();
     block.boards[0] = 0xAA55AA55AA55AA55; // Initial pattern
 
     group.bench_function("simd_block_step", |b| {

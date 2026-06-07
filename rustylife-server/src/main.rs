@@ -35,13 +35,13 @@ use axum::{
 use clap::Parser;
 use rustylife_core::{
     Request, Response, SimulationPresenter,
-    engine::{EngineSubscriber, SimulationEngine},
-    space::SimulationSpace,
+    engine::{Engine, EngineSubscriber},
+    space::Space,
 };
 use rustylife_gui::{AppState, RustyLifeApp, UserActionHandler};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
@@ -88,16 +88,20 @@ pub struct Args {
     /// Frequency of periodic status logging in minutes (default 20)
     #[arg(long, default_value_t = 20.0)]
     pub log_interval: f64,
+
+    /// History depth to track (1 = mono-state/no-history, 2 = bi-state, 3 = tri-state)
+    #[arg(long, default_value_t = 3)]
+    pub depth: usize,
 }
 
 /// Broadcasts result when a snapshot is ready.
-pub struct ServerEngineSubscriber {
-    pub engine: Arc<SimulationEngine>,
+pub struct ServerEngineSubscriber<const N: usize> {
+    pub engine: Arc<Engine<N>>,
     #[allow(clippy::type_complexity)]
     pub tx: broadcast::Sender<(Arc<Vec<((i128, i128), u8)>>, rustylife_core::Telemetry)>,
 }
 
-impl EngineSubscriber for ServerEngineSubscriber {
+impl<const N: usize> EngineSubscriber for ServerEngineSubscriber<N> {
     fn on_snapshot_available(
         &self,
         data: Arc<Vec<((i128, i128), u8)>>,
@@ -254,8 +258,8 @@ impl EngineSubscriber for LoggingSubscriber {
     }
 }
 
-struct AppStateEnv {
-    engine: Arc<SimulationEngine>,
+struct AppStateEnv<const N: usize> {
+    engine: Arc<Engine<N>>,
     #[allow(clippy::type_complexity)]
     tx: broadcast::Sender<(Arc<Vec<((i128, i128), u8)>>, rustylife_core::Telemetry)>,
     shutdown_tx: broadcast::Sender<()>,
@@ -270,12 +274,12 @@ enum ClientType {
     },
 }
 
-struct ServerActionHandler {
-    engine: Arc<SimulationEngine>,
+struct ServerActionHandler<const N: usize> {
+    engine: Arc<Engine<N>>,
     state: Arc<Mutex<AppState>>,
 }
 
-impl UserActionHandler for ServerActionHandler {
+impl<const N: usize> UserActionHandler for ServerActionHandler<N> {
     fn start(&mut self) {
         self.engine.start();
     }
@@ -318,7 +322,34 @@ impl UserActionHandler for ServerActionHandler {
     }
 }
 
-static ENGINE_REF: OnceLock<Weak<SimulationEngine>> = OnceLock::new();
+#[allow(clippy::type_complexity)]
+pub trait EngineTelemetryProvider: Send + Sync {
+    fn get_generation(&self) -> u64;
+    fn get_living_count(&self) -> u64;
+    fn get_bounds(&self) -> Option<Option<((i128, i128), (i128, i128))>>;
+    fn get_telemetry_rates(&self) -> Option<(f64, f64, f64)>;
+}
+
+impl<const N: usize> EngineTelemetryProvider for Engine<N> {
+    fn get_generation(&self) -> u64 {
+        self.generation()
+    }
+    fn get_living_count(&self) -> u64 {
+        self.living_count.load(Ordering::Relaxed)
+    }
+    #[allow(clippy::type_complexity)]
+    fn get_bounds(&self) -> Option<Option<((i128, i128), (i128, i128))>> {
+        self.current_generation_bounds.try_lock().ok().map(|g| *g)
+    }
+    fn get_telemetry_rates(&self) -> Option<(f64, f64, f64)> {
+        self.telemetry
+            .try_lock()
+            .ok()
+            .map(|t| (t.gps, t.work_rate_ema, t.net_rate_ema))
+    }
+}
+
+static ENGINE_REF: OnceLock<std::sync::Weak<dyn EngineTelemetryProvider>> = OnceLock::new();
 
 fn format_with_commas(n: u64) -> String {
     let s = n.to_string();
@@ -398,7 +429,7 @@ fn oom_crash_report(size: usize) {
     if let Some(engine_weak) = ENGINE_REF.get()
         && let Some(engine) = engine_weak.upgrade()
     {
-        let _ = write_crash_telemetry(&mut std::io::stderr(), Some(&engine));
+        let _ = write_crash_telemetry(&mut std::io::stderr(), Some(engine.as_ref()));
     }
     eprintln!("==================================================\n");
     std::process::abort();
@@ -406,7 +437,7 @@ fn oom_crash_report(size: usize) {
 
 pub fn write_crash_telemetry(
     mut out: impl std::io::Write,
-    engine: Option<&SimulationEngine>,
+    engine: Option<&dyn EngineTelemetryProvider>,
 ) -> std::io::Result<()> {
     writeln!(out, "\n==================================================")?;
     writeln!(out, "              RUSTYLIFE CRASH REPORT              ")?;
@@ -419,29 +450,31 @@ pub fn write_crash_telemetry(
         writeln!(
             out,
             "  Generation: {}",
-            format_with_commas(engine.generation())
+            format_with_commas(engine.get_generation())
         )?;
         writeln!(
             out,
             "  Population: {}",
-            format_with_commas(engine.living_count.load(Ordering::Relaxed))
+            format_with_commas(engine.get_living_count())
         )?;
 
         write!(out, "  Bounds:     ")?;
-        if let Ok(bounds_lock) = engine.current_generation_bounds.try_lock() {
-            if let Some(((min_x, min_y), (max_x, max_y))) = *bounds_lock {
+        match engine.get_bounds() {
+            Some(Some(((min_x, min_y), (max_x, max_y)))) => {
                 writeln!(out, "({}, {}) to ({}, {})", min_x, min_y, max_x, max_y)?;
-            } else {
+            }
+            Some(None) => {
                 writeln!(out, "None")?;
             }
-        } else {
-            writeln!(out, "Locked")?;
+            None => {
+                writeln!(out, "Locked")?;
+            }
         }
 
-        if let Ok(tel) = engine.telemetry.try_lock() {
-            writeln!(out, "  GPS:        {}", format_si_rate(tel.gps))?;
-            writeln!(out, "  Work Rate:  {}", format_si_rate(tel.work_rate_ema))?;
-            writeln!(out, "  Net Rate:   {}", format_si_rate(tel.net_rate_ema))?;
+        if let Some((gps, work_rate_ema, net_rate_ema)) = engine.get_telemetry_rates() {
+            writeln!(out, "  GPS:        {}", format_si_rate(gps))?;
+            writeln!(out, "  Work Rate:  {}", format_si_rate(work_rate_ema))?;
+            writeln!(out, "  Net Rate:   {}", format_si_rate(net_rate_ema))?;
         } else {
             writeln!(out, "  GPS:        Locked")?;
             writeln!(out, "  Work Rate:  Locked")?;
@@ -499,6 +532,21 @@ fn setup_panic_hook() {
 fn main() {
     let args = rustylife_core::cli::init_cli::<Args>();
 
+    // Validate that depth is in range 1..=3
+    if args.depth < 1 || args.depth > 3 {
+        eprintln!("Error: --depth must be 1, 2, or 3 (got {})", args.depth);
+        std::process::exit(1);
+    }
+
+    match args.depth {
+        1 => run_server_with_depth::<2>(args),
+        2 => run_server_with_depth::<3>(args),
+        3 => run_server_with_depth::<4>(args),
+        _ => unreachable!(),
+    }
+}
+
+fn run_server_with_depth<const N: usize>(args: Args) {
     // We must run the GUI on the main thread for Windows/Cross-platform compatibility.
     // So we'll run use a manual Tokio runtime on a background thread.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -506,7 +554,7 @@ fn main() {
         .build()
         .unwrap();
 
-    let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
+    let space = Arc::new(Space::<N>::new(rustylife_core::BUCKET_COUNT));
     let pool_size = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
@@ -514,10 +562,11 @@ fn main() {
         "Initializing Simulation Engine with {} workers (+1 I/O thread)...",
         pool_size
     );
-    let engine = SimulationEngine::new(space.clone(), pool_size);
+    let engine = Engine::<N>::new(space.clone(), pool_size);
 
     // Set up global crash reporting
-    let _ = ENGINE_REF.set(Arc::downgrade(&engine));
+    let telemetry_provider: Arc<dyn EngineTelemetryProvider> = engine.clone();
+    let _ = ENGINE_REF.set(Arc::downgrade(&telemetry_provider));
     setup_panic_hook();
 
     // Windows sleep prevention
@@ -532,7 +581,7 @@ fn main() {
         broadcast::channel::<(Arc<Vec<((i128, i128), u8)>>, rustylife_core::Telemetry)>(100);
 
     // Register subscriber for real-time broadcasts
-    let subscriber = Arc::new(ServerEngineSubscriber {
+    let subscriber = Arc::new(ServerEngineSubscriber::<N> {
         engine: engine.clone(),
         tx: tx.clone(),
     });
@@ -547,6 +596,7 @@ fn main() {
             cores: pool_size,
             is_connected: true, // Native GUI is always "connected" to the internal engine
             patterns: engine.get_catalog(),
+            states: N - 1,
             ..Default::default()
         };
         let state = Arc::new(Mutex::new(state));
@@ -584,7 +634,7 @@ fn main() {
 
     let (shutdown_tx, mut shutdown_rx) = broadcast::channel(1);
 
-    let shared_state = Arc::new(AppStateEnv {
+    let shared_state = Arc::new(AppStateEnv::<N> {
         engine: engine.clone(),
         tx: tx.clone(),
         shutdown_tx: shutdown_tx.clone(),
@@ -619,7 +669,7 @@ fn main() {
             .route("/dashboard.js", get(dashboard_js))
             .route("/utils.js", get(utils_js))
             .route("/protocol.js", get(protocol_js))
-            .route("/ws", get(ws_handler))
+            .route("/ws", get(ws_handler::<N>))
             .with_state(shared_state_clone.clone());
 
         // Telemetry Server for Realtime Graphing (Port 8086)
@@ -629,7 +679,7 @@ fn main() {
                 .route("/", get(telemetry_html))
                 .route("/telemetry.js", get(telemetry_js))
                 .route("/protocol.js", get(protocol_js))
-                .route("/ws", get(ws_handler))
+                .route("/ws", get(ws_handler::<N>))
                 .with_state(telemetry_state);
 
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", telemetry_port))
@@ -654,7 +704,7 @@ fn main() {
             loop {
                 if let Ok((stream, _)) = listener.accept().await {
                     let state = ipc_state.clone();
-                    tokio::spawn(handle_ipc(stream, state));
+                    tokio::spawn(handle_ipc::<N>(stream, state));
                 }
             }
         });
@@ -678,7 +728,7 @@ fn main() {
         let gui_shutdown_rx = shutdown_tx.subscribe();
 
         // Create Handler
-        let handler = Box::new(ServerActionHandler {
+        let handler = Box::new(ServerActionHandler::<N> {
             engine: engine.clone(),
             state: gui_state.clone(),
         });
@@ -703,7 +753,7 @@ fn main() {
     }
 }
 
-fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
+fn load_dynamic_patterns<const N: usize>(engine: &Arc<Engine<N>>) {
     // Look for patterns relative to the executable location (target/debug/patterns)
     // This ensures it works for both deployment (copy exe+dir) and cargo run (if copied to target).
     let patterns_dir = std::env::current_exe()
@@ -760,8 +810,8 @@ fn load_dynamic_patterns(engine: &Arc<SimulationEngine>) {
     }
 }
 
-fn make_current_state_payload(
-    engine: &SimulationEngine,
+fn make_current_state_payload<const N: usize>(
+    engine: &Engine<N>,
     client_type: &Option<ClientType>,
 ) -> Option<(Vec<u8>, u64)> {
     match client_type {
@@ -847,14 +897,14 @@ async fn protocol_js() -> impl IntoResponse {
     )
 }
 
-async fn ws_handler(
+async fn ws_handler<const N: usize>(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<AppStateEnv>>,
+    State(state): State<Arc<AppStateEnv<N>>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
+    ws.on_upgrade(|socket| handle_socket::<N>(socket, state))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
+async fn handle_socket<const N: usize>(mut socket: WebSocket, state: Arc<AppStateEnv<N>>) {
     let mut rx = state.tx.subscribe();
     let mut shutdown_rx = state.shutdown_tx.subscribe();
 
@@ -869,6 +919,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
         cores: state.cores,
         patterns: state.engine.get_catalog(),
         palette: rustylife_core::ColorPalette::default(),
+        states: N - 1,
     };
     let _ = socket.send(Message::Binary(welcome.to_bytes())).await;
 
@@ -1047,7 +1098,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppStateEnv>) {
     }
 }
 
-async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
+async fn handle_ipc<const N: usize>(stream: TcpStream, state: Arc<AppStateEnv<N>>) {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut rx = state.tx.subscribe();
@@ -1062,6 +1113,7 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
         cores: state.cores,
         patterns: state.engine.get_catalog(),
         palette: rustylife_core::ColorPalette::default(),
+        states: N - 1,
     };
     let bytes = welcome.to_bytes();
     let _ = writer.write_all(&bytes).await;
@@ -1206,10 +1258,9 @@ async fn handle_ipc(stream: TcpStream, state: Arc<AppStateEnv>) {
 #[cfg(test)]
 mod crash_telemetry_tests {
     use super::*;
-    use rustylife_core::space::SimulationSpace;
 
     // Helper macro to easily capture the engine state into a String via our std::io::Write trait proxy
-    fn capture_report(engine: Option<&SimulationEngine>) -> String {
+    fn capture_report(engine: Option<&dyn EngineTelemetryProvider>) -> String {
         let mut buffer = Vec::new();
         write_crash_telemetry(&mut buffer, engine).unwrap();
         String::from_utf8(buffer).unwrap()
@@ -1226,8 +1277,8 @@ mod crash_telemetry_tests {
 
     #[test]
     fn test_format_crash_telemetry_some() {
-        let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-        let engine = SimulationEngine::new(space.clone(), 1);
+        let space = Arc::new(Space::<4>::new(rustylife_core::BUCKET_COUNT));
+        let engine = Engine::<4>::new(space.clone(), 1);
 
         // Manipulate engine state
         engine.generation.store(1234567, Ordering::SeqCst);
@@ -1241,7 +1292,7 @@ mod crash_telemetry_tests {
             tel.net_rate_ema = 90.12;
         }
 
-        let report = capture_report(Some(&engine));
+        let report = capture_report(Some(engine.as_ref()));
         println!("{}", report);
         assert!(report.contains("Generation: 1,234,567"));
         assert!(report.contains("Population: 9,876,543"));
@@ -1264,8 +1315,8 @@ mod crash_telemetry_tests {
 
     #[test]
     fn test_format_crash_telemetry_locked() {
-        let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-        let engine = SimulationEngine::new(space.clone(), 1);
+        let space = Arc::new(Space::<4>::new(rustylife_core::BUCKET_COUNT));
+        let engine = Engine::<4>::new(space.clone(), 1);
 
         engine.generation.store(42, Ordering::SeqCst);
         engine.living_count.store(100, Ordering::SeqCst);
@@ -1274,7 +1325,7 @@ mod crash_telemetry_tests {
         let _tel_lock = engine.telemetry.lock().unwrap();
         let _bounds_lock = engine.current_generation_bounds.lock().unwrap();
 
-        let report = capture_report(Some(&engine));
+        let report = capture_report(Some(engine.as_ref()));
         println!("{}", report);
         assert!(report.contains("Generation: 42"));
         assert!(report.contains("Population: 100"));
@@ -1396,14 +1447,14 @@ mod crash_telemetry_tests {
 
     #[test]
     fn test_make_current_state_payload_metrics_only_performance() {
-        use rustylife_core::engine::SimulationEngine;
-        use rustylife_core::space::SimulationSpace;
+        use rustylife_core::engine::Engine;
+        use rustylife_core::space::Space;
         use std::sync::Arc;
         use std::time::Instant;
 
         // Create a massive simulation space
-        let space = Arc::new(SimulationSpace::new(rustylife_core::BUCKET_COUNT));
-        let engine = SimulationEngine::new(space.clone(), 4);
+        let space = Arc::new(Space::<4>::new(rustylife_core::BUCKET_COUNT));
+        let engine = Engine::<4>::new(space.clone(), 4);
 
         // Seed massive block of 250,000 cells directly
         for i in 0..500 {

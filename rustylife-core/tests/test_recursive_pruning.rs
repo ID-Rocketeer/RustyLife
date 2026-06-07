@@ -17,7 +17,7 @@ use rustylife_core::block_tree::BlockTree;
 
 #[test]
 fn test_recursive_pruning() {
-    let mut tree = BlockTree::new();
+    let mut tree = BlockTree::<4>::new();
 
     // Create a chain of blocks: Root -> Child -> Grandchild
     // Use coordinates that will likely cause this structure (BST depends on insertion order and value)
@@ -57,4 +57,30 @@ fn test_recursive_pruning() {
     // The remaining node should have the coordinates of the survivor (10, 10)
     assert_eq!(tree.arena.nodes[0].bx, 10);
     assert_eq!(tree.arena.nodes[0].by, 10);
+}
+
+#[test]
+fn test_degenerate_tree_pruning() {
+    let mut tree = BlockTree::<4>::new();
+
+    // Create a deep degenerate tree of 10,000 nodes
+    let mut curr_idx = tree.arena.alloc(0, 0);
+    tree.root = Some(curr_idx);
+
+    for i in 1..10000 {
+        let next_idx = tree.arena.alloc(i as i128, i as i128);
+        tree.arena.nodes[curr_idx as usize].right = Some(next_idx);
+        curr_idx = next_idx;
+    }
+
+    // Mark the last node as alive
+    tree.arena.nodes[curr_idx as usize].block.boards[0] = 1;
+
+    // Prune. Under the old recursive implementation, this would stack overflow.
+    // Under the new iterative implementation, it should succeed.
+    tree.prune();
+
+    assert_eq!(tree.arena.nodes.len(), 1);
+    assert_eq!(tree.arena.nodes[0].bx, 9999);
+    assert_eq!(tree.arena.nodes[0].by, 9999);
 }

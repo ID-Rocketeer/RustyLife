@@ -17,7 +17,7 @@ use rustylife_core::block_tree::BlockTree;
 
 #[test]
 fn test_dead_node_retention() {
-    let mut tree = BlockTree::new();
+    let mut tree = BlockTree::<4>::new();
 
     // Create a Parent -> Child relationship
     // Parent: (0, 0) - Dead

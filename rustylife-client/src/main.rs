@@ -123,12 +123,13 @@ async fn main() -> anyhow::Result<()> {
 
                             if let Ok(response) = serde_json::from_slice::<rustylife_core::Response>(&json_payload) {
                                 match response {
-                                    rustylife_core::Response::Welcome { cores, patterns, palette } => {
+                                    rustylife_core::Response::Welcome { cores, patterns, palette, states } => {
                                         let req = {
                                             let mut s = state_clone.lock().unwrap();
                                             s.cores = cores;
                                             s.patterns = patterns;
                                             s.palette = palette;
+                                            s.states = states;
                                             Request::HandshakeFullSnapshot { viewport: s.target_viewport }
                                         };
                                         let _ = writer.write_all(&req.to_bytes()).await;

@@ -16,34 +16,30 @@
 use crate::cell::CellState;
 use std::cmp::Ordering;
 
-/// A block of 8x8 cells, packed into 4x 64-bit integers for history.
+/// A block of 8x8 cells, packed into Nx 64-bit integers for history.
 ///
-/// This struct maintains history for 4 generations (Current, Last, LastLast, Next)
+/// This struct maintains history for N generations
 /// using a circular buffer approach compatible with `SimulationMasks`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Block8x8 {
-    // 4 bitboards acting as a circular buffer.
+pub struct Block8x8<const N: usize = 4> {
+    // N bitboards acting as a circular buffer.
     // Indexing follows the global mask logic (log2(mask)).
-    // Mask 1 (0001) -> boards[0]
-    // Mask 2 (0010) -> boards[1]
-    // Mask 4 (0100) -> boards[2]
-    // Mask 8 (1000) -> boards[3]
-    pub boards: [u64; 4],
+    pub boards: [u64; N],
 }
 
-impl Block8x8 {
+impl<const N: usize> Block8x8<N> {
     pub fn new() -> Self {
-        Self { boards: [0; 4] }
+        Self { boards: [0; N] }
     }
 }
 
-impl Default for Block8x8 {
+impl<const N: usize> Default for Block8x8<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Block8x8 {
+impl<const N: usize> Block8x8<N> {
     /// Set a bit in the block for a specific mask index.
     pub fn set_bit(&mut self, local_x: u8, local_y: u8, mask_idx: usize, state: bool) {
         let bit_index = (local_y as usize * 8) + local_x as usize;
@@ -93,49 +89,15 @@ impl Block8x8 {
         let w = ((center & COL_7_MASK) << 1) | w_mask;
         let e = ((center & COL_0_MASK) >> 1) | e_mask;
 
-        // Corners: explicitly combine derived internal corners with external corner masks
-        // Internal NE: (n & col7) << 1. External NE: ne_mask (shifted to correct position by caller? No, mask should be aligned).
-        // Wait, caller passes 64-bit mask.
-        // For corners, the mask should have the single bit set at the correct position (e.g. 0, 7, 56, 63).
-        // But `ne` variable needs to be a full 64-bit neighborhood mask.
-        // It needs `ne` bit for EVERY cell.
-        // Most cells get NE from `n` shifted or `e` shifted.
-        // Only the edgemost cells need external data.
-
         let ne_internal = (n & COL_0_MASK) >> 1;
         let nw_internal = (n & COL_7_MASK) << 1;
         let se_internal = (s & COL_0_MASK) >> 1;
         let sw_internal = (s & COL_7_MASK) << 1;
 
         // Combine with external masks
-        // Ensure masks only provide the missing bits to avoid corruption?
-        // Caller provides single bits. OR them in.
-
-        let _ne = ne_internal | e_mask << 8 | ne_mask; // e_mask<<8 covers right edge. ne_mask covers BL corner of NE block? No.
-        // ne_mask is the NE Neighbor Data.
-        // For cell (7,0), we need NE neighbor (-1, -1) relative to it?
-        // Cell (7,0) is Top-Right. NE neighbor is at (8, -1).
-        // This is outside.
-        // `ne_mask` should provide this.
-
-        // Simplified: Trust the masks provided by caller to fill the gaps.
-        // The `internal` shifts leave gaps at edges.
-        // `e_mask` fills Right Edge.
-        // `n_mask` fills Top Edge.
-        // `ne_mask` fills Top-Right Corner.
-
-        // Let's assume masks are pre-shifted by caller if needed, or simply placed correctly.
-        // In engine.rs, we passed `1u64 << 56` etc.
-        // These are single bits.
-        // Just OR them in.
-
-        // NE needs East Edge (shifted North) and NE Corner
         let ne = ne_internal | (e_mask << 8) | ne_mask;
-        // NW needs West Edge (shifted North) and NW Corner
         let nw = nw_internal | (w_mask << 8) | nw_mask;
-        // SE needs East Edge (shifted South) and SE Corner
         let se = se_internal | (e_mask >> 8) | se_mask;
-        // SW needs West Edge (shifted South) and SW Corner
         let sw = sw_internal | (w_mask >> 8) | sw_mask;
 
         // Full Adder Chain (B3/S23)
@@ -175,11 +137,6 @@ impl Block8x8 {
         let carry_k3 = (sum_bit_1_partial & k3) | ((sum_bit_1_partial ^ k3) & c_s12_s34);
         let weight_4_mask = l1 | l2 | l3 | carry_k1k2 | carry_k3;
 
-        // Alive if 3, or (2 and Alive)
-        // 3: Bit0=1, Bit1=1
-        // 2: Bit0=0, Bit1=1
-        // Result = (!Mask4 & Bit1) & (Bit0 | Center)
-
         let next_state = (!weight_4_mask & sum_bit_1) & (s12_34 | center);
         self.boards[next_idx] = next_state;
 
@@ -187,29 +144,22 @@ impl Block8x8 {
         let pop = next_state.count_ones() as u8;
 
         // Born: Alive in NEXT but NOT in CURRENT
-
-        // Born: Alive in NEXT but NOT in CURRENT
         let born = (next_state & !center).count_ones() as u8;
 
         // Died: Alive in CURRENT but NOT in NEXT
         let died = (center & !next_state).count_ones() as u8;
 
-        // Work: A block is 8x8 (64 cells). Since we processes the entire block via SIMD,
-        // the CPU does exactly 64 cells worth of work whenever this function is called.
         let work = 64;
-        let is_dead = self.boards[0] == 0
-            && self.boards[1] == 0
-            && self.boards[2] == 0
-            && self.boards[3] == 0;
+        let is_dead = self.is_dead();
 
         (pop, born, died, work, is_dead)
     }
 
     pub fn is_dead(&self) -> bool {
-        self.boards[0] == 0 && self.boards[1] == 0 && self.boards[2] == 0 && self.boards[3] == 0
+        self.boards.iter().all(|&board| board == 0)
     }
 
-    /// Returns the bounding box of living cells in the given state index (0, 1, or 2).
+    /// Returns the bounding box of living cells in the given state index.
     /// Coordinates are relative to the block's origin (0..7).
     pub fn exact_bounds_in_state(&self, state_idx: usize) -> Option<((i128, i128), (i128, i128))> {
         let state = self.boards[state_idx];
@@ -217,19 +167,18 @@ impl Block8x8 {
             return None;
         }
 
-        // Y-bounds: trailing/leading zeros on the 64-bit word correspond to rows.
+        // Y-bounds: trailing/leading zeros correspond to rows.
         let min_y = (state.trailing_zeros() / 8) as i128;
         let max_y = (63 - state.leading_zeros()) as i128 / 8;
 
         // X-bounds: collapse all rows into one 8-bit mask.
-        // We use a simple loop or a sequence of ORs.
         let mut row_mask = (state & 0xFF) as u8;
         for i in 1..8 {
             row_mask |= ((state >> (i * 8)) & 0xFF) as u8;
         }
 
         let min_x = row_mask.trailing_zeros() as i128;
-        let max_x = 7 - row_mask.leading_zeros() as i128; // u8.leading_zeros() returns 0..8
+        let max_x = 7 - row_mask.leading_zeros() as i128;
 
         Some(((min_x, min_y), (max_x, max_y)))
     }
@@ -238,15 +187,15 @@ impl Block8x8 {
 pub type BlockIndex = u32;
 
 #[derive(Debug, Clone)]
-pub struct BlockNode {
+pub struct BlockNode<const N: usize = 4> {
     pub bx: i128,
     pub by: i128,
-    pub block: Block8x8,
+    pub block: Block8x8<N>,
     pub left: Option<BlockIndex>,
     pub right: Option<BlockIndex>,
 }
 
-impl BlockNode {
+impl<const N: usize> BlockNode<N> {
     pub fn new(bx: i128, by: i128) -> Self {
         Self {
             bx,
@@ -258,13 +207,12 @@ impl BlockNode {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct BlockArena {
-    pub nodes: Vec<BlockNode>,
-    // free_list removed as we use uniform pruning (compaction)
+#[derive(Debug)]
+pub struct BlockArena<const N: usize = 4> {
+    pub nodes: Vec<BlockNode<N>>,
 }
 
-impl BlockArena {
+impl<const N: usize> BlockArena<N> {
     pub fn new() -> Self {
         Self {
             nodes: Vec::with_capacity(1024),
@@ -272,7 +220,6 @@ impl BlockArena {
     }
 
     pub fn alloc(&mut self, bx: i128, by: i128) -> BlockIndex {
-        // Enforce fixed chunk growth to avoid exponential doubling behavior
         if self.nodes.len() == self.nodes.capacity() {
             self.nodes.reserve(1024);
         }
@@ -282,11 +229,11 @@ impl BlockArena {
         idx
     }
 
-    pub fn get(&self, idx: BlockIndex) -> &BlockNode {
+    pub fn get(&self, idx: BlockIndex) -> &BlockNode<N> {
         &self.nodes[idx as usize]
     }
 
-    pub fn get_mut(&mut self, idx: BlockIndex) -> &mut BlockNode {
+    pub fn get_mut(&mut self, idx: BlockIndex) -> &mut BlockNode<N> {
         &mut self.nodes[idx as usize]
     }
 
@@ -295,12 +242,18 @@ impl BlockArena {
     }
 }
 
-pub struct BlockTree {
-    pub root: Option<BlockIndex>,
-    pub arena: BlockArena,
+impl<const N: usize> Default for BlockArena<N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-impl BlockTree {
+pub struct BlockTree<const N: usize = 4> {
+    pub root: Option<BlockIndex>,
+    pub arena: BlockArena<N>,
+}
+
+impl<const N: usize> BlockTree<N> {
     pub fn new() -> Self {
         Self {
             root: None,
@@ -309,13 +262,13 @@ impl BlockTree {
     }
 }
 
-impl Default for BlockTree {
+impl<const N: usize> Default for BlockTree<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl BlockTree {
+impl<const N: usize> BlockTree<N> {
     pub fn bounds(&self, mask: usize) -> Option<((i128, i128), (i128, i128))> {
         let mask_idx = Self::mask_to_index(mask);
         let mut min_x = i128::MAX;
@@ -363,9 +316,6 @@ impl BlockTree {
     fn coords_to_block(x: i128, y: i128) -> (i128, i128, u8, u8) {
         let bx = x >> 3;
         let by = y >> 3;
-        // Local coords: need to handle negative numbers correctly for modulo.
-        // Rust's % operator preserves sign. We want Euclidean modulo.
-        // x & 7 is sufficient if we assume 2's complement representation aligns (which it does for bitwise logic).
         let lx = (x & 7) as u8;
         let ly = (y & 7) as u8;
         (bx, by, lx, ly)
@@ -378,7 +328,7 @@ impl BlockTree {
             2 => 1,
             4 => 2,
             8 => 3,
-            _ => 0, // Fallback, shouldn't happen
+            _ => 0,
         }
     }
 
@@ -386,7 +336,6 @@ impl BlockTree {
         let (bx, by, lx, ly) = Self::coords_to_block(x, y);
         let mask_idx = Self::mask_to_index(mask);
 
-        // BST Insert/Find
         if self.root.is_none() {
             let root_idx = self.arena.alloc(bx, by);
             self.root = Some(root_idx);
@@ -394,7 +343,6 @@ impl BlockTree {
 
         let mut curr_idx = self.root.expect("Root should exist");
         loop {
-            // Scope the borrow of 'node' so it ends before we need to mutate 'self.arena'
             let (order, next_idx) = {
                 let node = self.arena.get(curr_idx);
                 let order = Self::compare_coords(bx, by, node.bx, node.by);
@@ -413,7 +361,6 @@ impl BlockTree {
                     if let Some(left) = next_idx {
                         curr_idx = left;
                     } else {
-                        // Insert Left
                         let new_node = self.arena.alloc(bx, by);
                         self.arena.get_mut(curr_idx).left = Some(new_node);
                         curr_idx = new_node;
@@ -424,7 +371,6 @@ impl BlockTree {
                     if let Some(right) = next_idx {
                         curr_idx = right;
                     } else {
-                        // Insert Right
                         let new_node = self.arena.alloc(bx, by);
                         self.arena.get_mut(curr_idx).right = Some(new_node);
                         curr_idx = new_node;
@@ -434,7 +380,6 @@ impl BlockTree {
             }
         }
 
-        // Now curr_idx points to the node (existing or newly created)
         let node = self.arena.get_mut(curr_idx);
         node.block
             .set_bit(lx, ly, mask_idx, state == CellState::Alive);
@@ -526,9 +471,7 @@ impl BlockTree {
         let l_idx = Self::mask_to_index(last_mask);
         let ll_idx = Self::mask_to_index(last_last_mask);
 
-        // Iterate direct arena for performance (skipping tree traversal)
         for node in &self.arena.nodes {
-            // Optimization: If block is completely empty in all masks, skip
             if node.block.is_dead() {
                 continue;
             }
@@ -542,8 +485,16 @@ impl BlockTree {
                     let bit_mask = 1 << bit_index;
 
                     let c = (node.block.boards[c_idx] & bit_mask) != 0;
-                    let l = (node.block.boards[l_idx] & bit_mask) != 0;
-                    let ll = (node.block.boards[ll_idx] & bit_mask) != 0;
+                    let l = if N >= 3 {
+                        (node.block.boards[l_idx] & bit_mask) != 0
+                    } else {
+                        false
+                    };
+                    let ll = if N >= 4 {
+                        (node.block.boards[ll_idx] & bit_mask) != 0
+                    } else {
+                        false
+                    };
 
                     let mut state_byte = 0u8;
                     if c {
@@ -577,25 +528,15 @@ impl BlockTree {
         let l_idx = Self::mask_to_index(last_mask);
         let ll_idx = Self::mask_to_index(last_last_mask);
 
-        // For Rect, tree traversal might be faster if arena is huge?
-        // But BST is sorted by Coordinates. Range query is possible.
-        // For now, let's use global arena scan for simplicity because "viewport" is usually small/specific
-        // OR viewport is the whole screen.
-        // Actually, if we want efficiency, we should implement range query on BST.
-        // But iterating a Vec is extremely fast.
-        // Let's iterate Vec and filter.
-
         for node in &self.arena.nodes {
             let bx_world = node.bx << 3;
             let by_world = node.by << 3;
 
-            // Check if block intersects rect
             if bx_world + 8 < min.0 || bx_world > max.0 || by_world + 8 < min.1 || by_world > max.1
             {
                 continue;
             }
 
-            // Iterate bits
             for ly in 0..8 {
                 let y = by_world + ly as i128;
                 if y < min.1 || y > max.1 {
@@ -612,8 +553,16 @@ impl BlockTree {
                     let bit_mask = 1 << bit_index;
 
                     let c = (node.block.boards[c_idx] & bit_mask) != 0;
-                    let l = (node.block.boards[l_idx] & bit_mask) != 0;
-                    let ll = (node.block.boards[ll_idx] & bit_mask) != 0;
+                    let l = if N >= 3 {
+                        (node.block.boards[l_idx] & bit_mask) != 0
+                    } else {
+                        false
+                    };
+                    let ll = if N >= 4 {
+                        (node.block.boards[ll_idx] & bit_mask) != 0
+                    } else {
+                        false
+                    };
 
                     let mut state_byte = 0u8;
                     if c {
@@ -636,11 +585,7 @@ impl BlockTree {
 
     pub fn population(&self, mask: u8) -> u64 {
         let board_idx = mask.trailing_zeros() as usize;
-        if board_idx >= 4 {
-            // Fallback or error? If mask is 0, trailing_zeros is 32/64.
-            // If mask is not power of 2, it picks lowest bit.
-            // Assuming mask is valid 1, 2, 4.
-            // If mask is 0, we shouldn't be here.
+        if board_idx >= N {
             return 0;
         }
 
@@ -655,12 +600,6 @@ impl BlockTree {
     }
 
     pub fn prune(&mut self) {
-        // Optimized Aggressive Pruning: O(N)
-        // 1. Traverse existing tree In-Order to collect ALIVE blocks.
-        //    Since it's a BST, in-order traversal yields nodes sorted by coordinate.
-        // 2. Clear arena.
-        // 3. Bulk-load the sorted blocks into a new balanced tree.
-
         let mut alive_blocks = Vec::with_capacity(self.arena.nodes.len());
         self.collect_alive_in_order(self.root, &mut alive_blocks);
 
@@ -669,38 +608,35 @@ impl BlockTree {
             return;
         }
 
-        // Use the naturally sorted data to rebuild
         self.arena.clear();
         self.root = None;
 
-        // Pre-allocate headroom
         self.arena.nodes.reserve(alive_blocks.len() + 1024);
 
         self.root = Self::bulk_load(&alive_blocks, &mut self.arena);
     }
 
-    fn collect_alive_in_order(&self, node_idx: Option<BlockIndex>, out: &mut Vec<BlockNode>) {
-        if let Some(idx) = node_idx {
-            // Recursive descent
-            // Note: recursion depth limited by tree height.
-            // If tree is very unbalanced (linked list), this could blow stack.
-            // But we rebuild as balanced, so it should stay manageable.
-            let node = &self.arena.nodes[idx as usize];
+    fn collect_alive_in_order(&self, node_idx: Option<BlockIndex>, out: &mut Vec<BlockNode<N>>) {
+        let mut stack = Vec::with_capacity(32);
+        let mut curr = node_idx;
 
-            // Left
-            self.collect_alive_in_order(node.left, out);
-
-            // Center (Self) - Filter DEAD nodes here
-            if !node.block.is_dead() {
-                out.push(node.clone());
+        while curr.is_some() || !stack.is_empty() {
+            while let Some(idx) = curr {
+                stack.push(idx);
+                curr = self.arena.nodes[idx as usize].left;
             }
 
-            // Right
-            self.collect_alive_in_order(node.right, out);
+            if let Some(idx) = stack.pop() {
+                let node = &self.arena.nodes[idx as usize];
+                if !node.block.is_dead() {
+                    out.push(node.clone());
+                }
+                curr = node.right;
+            }
         }
     }
 
-    fn bulk_load(nodes: &[BlockNode], arena: &mut BlockArena) -> Option<BlockIndex> {
+    fn bulk_load(nodes: &[BlockNode<N>], arena: &mut BlockArena<N>) -> Option<BlockIndex> {
         if nodes.is_empty() {
             return None;
         }
@@ -708,17 +644,12 @@ impl BlockTree {
         let mid = nodes.len() / 2;
         let node_data = &nodes[mid];
 
-        // Alloc in arena
         let idx = arena.alloc(node_data.bx, node_data.by);
-        // Copy block data
         arena.nodes[idx as usize].block = node_data.block;
 
-        // Recurse
         arena.nodes[idx as usize].left = Self::bulk_load(&nodes[0..mid], arena);
         arena.nodes[idx as usize].right = Self::bulk_load(&nodes[mid + 1..], arena);
 
         Some(idx)
     }
-
-    // collect_metric_stats removed (calculated in step)
 }

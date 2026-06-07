@@ -13,22 +13,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crate::space::SimulationSpace;
+use crate::space::Space;
 
 #[derive(Clone)]
-pub enum PatternSource {
-    Builtin(fn(&SimulationSpace, i128, i128)),
+pub enum PatternSource<const N: usize = 4> {
+    Builtin(fn(&Space<N>, i128, i128)),
     Rle(String),
 }
 
 #[derive(Clone)]
-pub struct Pattern {
+pub struct Pattern<const N: usize = 4> {
     pub name: String,
     pub description: String,
-    pub source: PatternSource,
+    pub source: PatternSource<N>,
 }
 
-pub fn get_builtin_patterns() -> Vec<Pattern> {
+pub fn get_builtin_patterns<const N: usize>() -> Vec<Pattern<N>> {
     // Patterns are now loaded dynamically from the `patterns/` directory.
     // We return an empty vector here to avoid duplication.
     vec![]

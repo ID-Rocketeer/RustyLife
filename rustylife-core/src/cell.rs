@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_cell_coordinates() {
-        let manager = SimulationMasks::new();
+        let manager = SimulationMasks::<4>::new();
         let guard = manager.read();
         let cell = Cell::new(10, -20, CellState::Dead, guard.current_state_mask());
         assert_eq!(cell.coordinates(), (10, -20));
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_cell_state_access() {
-        let manager = SimulationMasks::new();
+        let manager = SimulationMasks::<4>::new();
         let guard = manager.read();
         let cell = Cell::new(0, 0, CellState::Dead, guard.current_state_mask());
         assert_eq!(cell.state(0), CellState::Dead);
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_optimized_neighbor_count() {
-        let manager = SimulationMasks::new();
+        let manager = SimulationMasks::<4>::new();
         let cell = {
             let guard = manager.read();
             Cell::new(0, 0, CellState::Alive, guard.current_state_mask())
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_transition_rules_with_internal_count() {
-        let manager = SimulationMasks::new();
+        let manager = SimulationMasks::<4>::new();
         let guard = manager.read();
         let current = guard.current_state_mask();
         let next = guard.next_state_mask();
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_reset_neighbor_count() {
-        let manager = SimulationMasks::new();
+        let manager = SimulationMasks::<4>::new();
         let guard = manager.read();
         let cell = Cell::new(0, 0, CellState::Alive, guard.current_state_mask());
 
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_presenter_view() {
-        let manager = SimulationMasks::new();
+        let manager = SimulationMasks::<4>::new();
         // 0b0001
         let guard = manager.read();
         let current = guard.current_state_mask();

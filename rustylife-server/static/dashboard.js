@@ -87,6 +87,7 @@ let lastMouseX = 0;
 let lastMouseY = 0;
 
 let latestTelemetry = null;
+let states = 3;
 let colorMode = 'tri-state';
 colorModeBtn.innerText = 'Tri-State';
 
@@ -385,6 +386,30 @@ function connect() {
             const cores = header.payload.cores;
             coresEl.innerHTML = `[ ${String(cores).padStart(2, '0')} ]`;
 
+            if (header.payload.states !== undefined) {
+                states = header.payload.states;
+            } else {
+                states = 3;
+            }
+
+            // Default to the highest available mode
+            if (states === 1) {
+                colorMode = 'classic';
+            } else if (states === 2) {
+                colorMode = 'bi-state';
+            } else {
+                colorMode = 'tri-state';
+            }
+            colorModeBtn.innerText = colorMode === 'classic' ? 'Classic' : (colorMode === 'bi-state' ? 'Bi-State' : 'Tri-State');
+            
+            if (states <= 1) {
+                colorModeBtn.disabled = true;
+                colorModeBtn.title = "Color mode switching is disabled (mono-state depth)";
+            } else {
+                colorModeBtn.disabled = false;
+                colorModeBtn.title = "Cycle cell presentation mode";
+            }
+
             if (header.payload.palette) {
                 serverPalette = header.payload.palette;
                 updateColorKey();
@@ -523,10 +548,16 @@ zoomInBtn.onclick = () => updateZoom(1);
 zoomOutBtn.onclick = () => updateZoom(-1);
 
 colorModeBtn.onclick = () => {
+    if (states <= 1) return;
+
     if (colorMode === 'classic') {
         colorMode = 'bi-state';
     } else if (colorMode === 'bi-state') {
-        colorMode = 'tri-state';
+        if (states >= 3) {
+            colorMode = 'tri-state';
+        } else {
+            colorMode = 'classic';
+        }
     } else {
         colorMode = 'classic';
     }

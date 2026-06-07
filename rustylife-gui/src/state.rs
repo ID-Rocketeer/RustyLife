@@ -31,6 +31,7 @@ pub struct AppState {
     pub bounds: Option<((i128, i128), (i128, i128))>,
     pub repaint_ctx: Option<egui::Context>,
     pub palette: rustylife_core::ColorPalette,
+    pub states: usize,
 }
 
 impl Default for AppState {
@@ -50,6 +51,7 @@ impl Default for AppState {
             bounds: None,
             repaint_ctx: None,
             palette: rustylife_core::ColorPalette::default(),
+            states: 3,
         }
     }
 }

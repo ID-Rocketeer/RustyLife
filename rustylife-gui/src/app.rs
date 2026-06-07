@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ColorMode {
     Classic,
     BiState,
@@ -56,6 +56,12 @@ impl RustyLifeApp {
         handler: Box<dyn UserActionHandler>,
         shutdown_rx: Option<broadcast::Receiver<()>>,
     ) -> Self {
+        let initial_states = state.lock().unwrap().states;
+        let color_mode = match initial_states {
+            1 => ColorMode::Classic,
+            2 => ColorMode::BiState,
+            _ => ColorMode::TriState,
+        };
         Self {
             state,
             handler,
@@ -66,7 +72,7 @@ impl RustyLifeApp {
             last_update_time: None,
             shutdown_rx,
             first_frame: true,
-            color_mode: ColorMode::TriState,
+            color_mode,
             show_color_key: false,
         }
     }
@@ -140,6 +146,7 @@ impl eframe::App for RustyLifeApp {
             bounds,
             expanse,
             palette,
+            states,
         ) = {
             let s = self.state.lock().unwrap();
             (
@@ -155,8 +162,18 @@ impl eframe::App for RustyLifeApp {
                 s.bounds,
                 s.expanse(),
                 s.palette.clone(),
+                s.states,
             )
         };
+
+        let max_mode = match states {
+            1 => ColorMode::Classic,
+            2 => ColorMode::BiState,
+            _ => ColorMode::TriState,
+        };
+        if self.color_mode > max_mode {
+            self.color_mode = max_mode;
+        }
 
         self.sync_generation(generation);
         self.last_update_time = Some(Instant::now());
@@ -303,23 +320,29 @@ impl eframe::App for RustyLifeApp {
                             )
                             .min_size(Vec2::new(0.0, btn_h));
 
-                            if ui
-                                .add_sized([80.0, btn_h], color_btn)
-                                .on_hover_text("Cycle cell presentation mode (Classic -> Bi-State -> Tri-State)")
-                                .clicked()
-                            {
-                                self.color_mode = match self.color_mode {
-                                    ColorMode::Classic => ColorMode::BiState,
-                                    ColorMode::BiState => ColorMode::TriState,
-                                    ColorMode::TriState => ColorMode::Classic,
-                                };
-                            }
+                            let color_btn_resp = ui.add_enabled_ui(states > 1, |ui| {
+                                if ui.add_sized([80.0, btn_h], color_btn).clicked() {
+                                    self.color_mode = match (states, self.color_mode) {
+                                        (2, ColorMode::Classic) => ColorMode::BiState,
+                                        (2, ColorMode::BiState) => ColorMode::Classic,
+                                        (2, _) => ColorMode::BiState,
+                                        (_, ColorMode::Classic) => ColorMode::BiState,
+                                        (_, ColorMode::BiState) => ColorMode::TriState,
+                                        (_, ColorMode::TriState) => ColorMode::Classic,
+                                    };
+                                }
+                            });
+
+                            color_btn_resp.response.on_hover_text(if states <= 1 {
+                                "Color mode switching is disabled (mono-state depth)"
+                            } else {
+                                "Cycle cell presentation mode"
+                            });
 
                             // Color Key / Legend Toggle Button
-                            let key_btn = egui::Button::new(
-                                egui::RichText::new("?").size(15.0).strong(),
-                            )
-                            .min_size(Vec2::new(0.0, btn_h));
+                            let key_btn =
+                                egui::Button::new(egui::RichText::new("?").size(15.0).strong())
+                                    .min_size(Vec2::new(0.0, btn_h));
 
                             if ui
                                 .add_sized([30.0, btn_h], key_btn)

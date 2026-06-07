@@ -17,7 +17,7 @@ use crate::PatternInfo;
 // use crate::block_tree::{BlockIndex, BlockTree}; // Unused imports removed
 
 use crate::scratchpad::{Candidate, Scratchpad};
-use crate::space::SimulationSpace;
+use crate::space::Space;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -54,7 +54,7 @@ pub trait EngineSubscriber: Send + Sync {
     ) -> bool;
 }
 
-pub type SimulationEngine = Engine;
+pub type SimulationEngine = Engine<4>;
 
 // ...
 
@@ -218,8 +218,8 @@ impl Telemetry {
     }
 }
 
-pub struct Engine {
-    pub space: Arc<SimulationSpace>,
+pub struct Engine<const N: usize = 4> {
+    pub space: Arc<Space<N>>,
     pub work_queue: Arc<WorkQueue>,
     pub in_flight_count: AtomicUsize,
     pub stop_signal: Arc<AtomicBool>,
@@ -261,10 +261,10 @@ pub struct CommitBuffer {
     pub coords: Vec<(i128, i128)>, // Kept for legacy compatibility if needed
 }
 
-unsafe impl Sync for Engine {}
+unsafe impl<const N: usize> Sync for Engine<N> {}
 
-impl Engine {
-    pub fn new(space: Arc<SimulationSpace>, pool_size: usize) -> Arc<Self> {
+impl<const N: usize> Engine<N> {
+    pub fn new(space: Arc<Space<N>>, pool_size: usize) -> Arc<Self> {
         let bucket_count = space.storage().buckets.len();
 
         // Initialize commit buffers

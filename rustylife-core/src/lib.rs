@@ -152,6 +152,8 @@ pub enum Response {
         patterns: Vec<PatternInfo>,
         #[serde(default)]
         palette: ColorPalette,
+        #[serde(default)]
+        states: usize,
     },
     /// A header indicates a binary payload follows.
     /// Redundant metrics stripped to enforce SnapshotAvailable as single source of truth.
