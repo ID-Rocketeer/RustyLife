@@ -10,5 +10,8 @@
     "jsdom": "^28.1.0",
     "typescript": "^5.9.3",
     "vitest": "^1.2.2"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
   }
 }
