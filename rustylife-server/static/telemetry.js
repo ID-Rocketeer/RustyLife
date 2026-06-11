@@ -195,14 +195,18 @@ function connect() {
             const telemetry = header.payload ? header.payload.telemetry : header.telemetry;
             updateTelemetry(telemetry);
 
-            // Acknowledge the frame to request the next one
-            sendRequest("AckPreviousFrame", { viewport: null });
+            // Acknowledge the frame to request the next one only if visible
+            if (typeof document === 'undefined' || !document.hidden) {
+                sendRequest("AckPreviousFrame", { viewport: null });
+            }
         } else if (header.type === "TelemetryBundle") {
             const bundle = header.payload ? header.payload.telemetry : header.telemetry;
             for (const t of bundle) {
                 updateTelemetry(t);
             }
-            sendRequest("AckPreviousFrame", { viewport: null });
+            if (typeof document === 'undefined' || !document.hidden) {
+                sendRequest("AckPreviousFrame", { viewport: null });
+            }
         } else if (header.type === "Error") {
             console.error("Server Error:", header.payload);
         }
@@ -213,6 +217,14 @@ function connect() {
         statusText.innerText = 'Disconnected - retrying...';
         setTimeout(connect, 2000);
     };
+}
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            sendRequest("AckPreviousFrame", { viewport: null });
+        }
+    });
 }
 
 // Start connection

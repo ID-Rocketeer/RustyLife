@@ -154,11 +154,6 @@ async fn main() -> anyhow::Result<()> {
                                             // Directly update the state with the embedded telemetry from the packet
                                             let embedded_telemetry = packet.telemetry;
                                             s.update_state(packet, embedded_telemetry);
-
-                                            // Prompt the Egui thread to render this newly received frame
-                                            if let Some(ctx) = &s.repaint_ctx {
-                                                ctx.request_repaint();
-                                            }
                                         }
 
                                         // Acknowledge receipt of the frame to get the next one

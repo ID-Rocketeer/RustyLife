@@ -714,64 +714,66 @@ impl eframe::App for RustyLifeApp {
                         s.target_viewport = Some(((min_x, min_y), (max_x, max_y)));
                     }
 
-                    for ((x, y), state) in cells {
-                        let color = match self.color_mode {
-                            ColorMode::Classic => {
-                                if (state & 4) != 0 {
-                                    egui::Color32::from_rgb(
-                                        palette.classic[0],
-                                        palette.classic[1],
-                                        palette.classic[2],
-                                    )
-                                } else {
-                                    continue;
+                    if crate::utils::should_repaint(ctx) {
+                        for ((x, y), state) in cells {
+                            let color = match self.color_mode {
+                                ColorMode::Classic => {
+                                    if (state & 4) != 0 {
+                                        egui::Color32::from_rgb(
+                                            palette.classic[0],
+                                            palette.classic[1],
+                                            palette.classic[2],
+                                        )
+                                    } else {
+                                        continue;
+                                    }
                                 }
-                            }
-                            ColorMode::BiState => match state & 6 {
-                                6 => {
-                                    let c = palette.bi_state[0];
-                                    egui::Color32::from_rgb(c[0], c[1], c[2])
+                                ColorMode::BiState => match state & 6 {
+                                    6 => {
+                                        let c = palette.bi_state[0];
+                                        egui::Color32::from_rgb(c[0], c[1], c[2])
+                                    }
+                                    4 => {
+                                        let c = palette.bi_state[1];
+                                        egui::Color32::from_rgb(c[0], c[1], c[2])
+                                    }
+                                    2 => {
+                                        let c = palette.bi_state[2];
+                                        egui::Color32::from_rgb(c[0], c[1], c[2])
+                                    }
+                                    _ => continue,
+                                },
+                                ColorMode::TriState => {
+                                    if (1..=7).contains(&state) {
+                                        let c = palette.tri_state[(state - 1) as usize];
+                                        egui::Color32::from_rgb(c[0], c[1], c[2])
+                                    } else {
+                                        continue;
+                                    }
                                 }
-                                4 => {
-                                    let c = palette.bi_state[1];
-                                    egui::Color32::from_rgb(c[0], c[1], c[2])
-                                }
-                                2 => {
-                                    let c = palette.bi_state[2];
-                                    egui::Color32::from_rgb(c[0], c[1], c[2])
-                                }
-                                _ => continue,
-                            },
-                            ColorMode::TriState => {
-                                if (1..=7).contains(&state) {
-                                    let c = palette.tri_state[(state - 1) as usize];
-                                    egui::Color32::from_rgb(c[0], c[1], c[2])
-                                } else {
-                                    continue;
-                                }
-                            }
-                        };
+                            };
 
-                        let screen_pos = self.projection.world_to_screen(x, y, rect);
-                        painter.rect_filled(
-                            egui::Rect::from_min_size(
-                                screen_pos,
-                                egui::vec2(
-                                    if self.projection.cell_size <= 1.0 {
-                                        self.projection.cell_size
-                                    } else {
-                                        self.projection.cell_size - 1.0
-                                    },
-                                    if self.projection.cell_size <= 1.0 {
-                                        self.projection.cell_size
-                                    } else {
-                                        self.projection.cell_size - 1.0
-                                    },
+                            let screen_pos = self.projection.world_to_screen(x, y, rect);
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(
+                                    screen_pos,
+                                    egui::vec2(
+                                        if self.projection.cell_size <= 1.0 {
+                                            self.projection.cell_size
+                                        } else {
+                                            self.projection.cell_size - 1.0
+                                        },
+                                        if self.projection.cell_size <= 1.0 {
+                                            self.projection.cell_size
+                                        } else {
+                                            self.projection.cell_size - 1.0
+                                        },
+                                    ),
                                 ),
-                            ),
-                            0.0,
-                            color,
-                        );
+                                0.0,
+                                color,
+                            );
+                        }
                     }
 
                     // Viewport Synchronization (Debounced)

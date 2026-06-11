@@ -87,7 +87,9 @@ impl SimulationPresenter for AppState {
         self.bounds = telemetry.bounds;
 
         if let Some(ctx) = &self.repaint_ctx {
-            ctx.request_repaint();
+            if crate::utils::should_repaint(ctx) {
+                ctx.request_repaint();
+            }
         }
     }
 

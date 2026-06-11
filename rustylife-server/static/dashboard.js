@@ -451,10 +451,15 @@ function connect() {
             // Binary Payload starts after JSON
             const binaryOffset = 4 + jsonLen;
 
-            renderCellsHybrid(meta, view, binaryOffset);
-
-            // Acknowledge the frame to request the next one (including the current viewport)
-            sendRequest("AckPreviousFrame", { viewport: getViewportPayload() });
+            // Only render and ack if the document is visible
+            if (typeof document === 'undefined' || !document.hidden) {
+                renderCellsHybrid(meta, view, binaryOffset);
+                // Acknowledge the frame to request the next one (including the current viewport)
+                sendRequest("AckPreviousFrame", { viewport: getViewportPayload() });
+            } else {
+                lastState = { meta, dataView: view, binaryOffset };
+                lastRenderedGen = gen;
+            }
             
         } else if (header.type === "Error") {
             console.error("Server Error:", header.payload);
@@ -640,6 +645,15 @@ window.addEventListener('keydown', (e) => {
     if (e.key === '+' || e.key === '=') updateZoom(1);
     if (e.key === '-') updateZoom(-1);
 });
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && lastState) {
+            // Request the next frame to resume the loop when tab becomes active again
+            sendRequest("AckPreviousFrame", { viewport: getViewportPayload() });
+        }
+    });
+}
 
 connect();
 updateButtonStates();

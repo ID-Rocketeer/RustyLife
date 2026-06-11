@@ -22,7 +22,7 @@ pub mod text;
 pub mod utils;
 pub use app::RustyLifeApp;
 pub use state::AppState;
-pub use utils::{fmt_num, format_si};
+pub use utils::{fmt_num, format_si, should_repaint};
 
 /// Trait for handling user actions from the GUI.
 /// This abstracts away whether the action is performed directly on the engine (Server)

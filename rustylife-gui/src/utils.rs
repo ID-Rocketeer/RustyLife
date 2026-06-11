@@ -98,6 +98,29 @@ pub fn format_si(val: f64, digits: usize, signed: bool) -> String {
     }
 }
 
+/// Check if the viewport should actually perform repaints.
+/// Pauses repaints if the window is minimized or if the Windows workstation is locked/asleep.
+pub fn should_repaint(ctx: &egui::Context) -> bool {
+    let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+    if minimized {
+        return false;
+    }
+
+    #[cfg(all(windows, not(test)))]
+    {
+        unsafe {
+            extern "system" {
+                fn GetForegroundWindow() -> *mut std::ffi::c_void;
+            }
+            if GetForegroundWindow().is_null() {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +132,27 @@ mod tests {
         assert_eq!(format_si(0.000005, 3, false), "[ 005.00 u/S ]");
         assert_eq!(format_si(0.0, 3, false), "[ 000.00 \u{00A0}/S ]");
         assert_eq!(format_si(1500.0, 3, false), "[ 001.50 K/S ]");
+    }
+
+    #[test]
+    fn test_should_repaint() {
+        let ctx = egui::Context::default();
+
+        // Test default state (should be true)
+        let raw_input = egui::RawInput::default();
+        let _ = ctx.run(raw_input, |_| {});
+        assert!(should_repaint(&ctx));
+
+        // Test minimized state (should be false)
+        let mut raw_input = egui::RawInput::default();
+        let viewport_info = egui::ViewportInfo {
+            minimized: Some(true),
+            ..Default::default()
+        };
+        raw_input
+            .viewports
+            .insert(egui::ViewportId::ROOT, viewport_info);
+        let _ = ctx.run(raw_input, |_| {});
+        assert!(!should_repaint(&ctx));
     }
 }
