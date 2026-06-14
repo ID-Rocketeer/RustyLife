@@ -305,14 +305,35 @@ impl<const N: usize> UserActionHandler for ServerActionHandler<N> {
 
         // Expensive viewport cell fetch only when caller provides a viewport
         if let Some(viewport) = viewport {
-            let cells = self.engine.get_cells_in_rect(viewport.0, viewport.1);
-            let mut s = self.state.lock().unwrap();
-            s.viewport_cells = cells;
-            s.generation = self.engine.generation();
-            s.population = self
-                .engine
-                .living_count
-                .load(std::sync::atomic::Ordering::Relaxed);
+            loop {
+                let seq_before = self
+                    .engine
+                    .commit_seq
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                if (seq_before & 1) != 0 {
+                    std::thread::yield_now();
+                    continue;
+                }
+
+                let gen_val = self.engine.generation();
+                let cells = self.engine.get_cells_in_rect(viewport.0, viewport.1);
+                let pop = self
+                    .engine
+                    .stable_population
+                    .load(std::sync::atomic::Ordering::SeqCst);
+
+                let seq_after = self
+                    .engine
+                    .commit_seq
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                if seq_before == seq_after {
+                    let mut s = self.state.lock().unwrap();
+                    s.viewport_cells = cells;
+                    s.generation = gen_val;
+                    s.population = pop;
+                    break;
+                }
+            }
         }
     }
     fn shutdown(&mut self) {
@@ -335,11 +356,11 @@ impl<const N: usize> EngineTelemetryProvider for Engine<N> {
         self.generation()
     }
     fn get_living_count(&self) -> u64 {
-        self.living_count.load(Ordering::Relaxed)
+        self.stable_population.load(Ordering::Relaxed)
     }
     #[allow(clippy::type_complexity)]
     fn get_bounds(&self) -> Option<Option<((i128, i128), (i128, i128))>> {
-        self.current_generation_bounds.try_lock().ok().map(|g| *g)
+        self.stable_bounds.try_lock().ok().map(|g| *g)
     }
     fn get_telemetry_rates(&self) -> Option<(f64, f64, f64)> {
         self.telemetry
@@ -1283,7 +1304,8 @@ mod crash_telemetry_tests {
         // Manipulate engine state
         engine.generation.store(1234567, Ordering::SeqCst);
         engine.living_count.store(9876543, Ordering::SeqCst);
-        *engine.current_generation_bounds.lock().unwrap() = Some(((-10, -5), (10, 5)));
+        engine.stable_population.store(9876543, Ordering::SeqCst);
+        *engine.stable_bounds.lock().unwrap() = Some(((-10, -5), (10, 5)));
 
         {
             let mut tel = engine.telemetry.lock().unwrap();
@@ -1320,10 +1342,11 @@ mod crash_telemetry_tests {
 
         engine.generation.store(42, Ordering::SeqCst);
         engine.living_count.store(100, Ordering::SeqCst);
+        engine.stable_population.store(100, Ordering::SeqCst);
 
         // Explicitly lock the mutexes and keep them locked during the formatter call!
         let _tel_lock = engine.telemetry.lock().unwrap();
-        let _bounds_lock = engine.current_generation_bounds.lock().unwrap();
+        let _bounds_lock = engine.stable_bounds.lock().unwrap();
 
         let report = capture_report(Some(engine.as_ref()));
         println!("{}", report);
@@ -1496,6 +1519,80 @@ mod crash_telemetry_tests {
             elapsed.as_millis() < 5,
             "make_current_state_payload for MetricsOnly took {}ms! This indicates an O(N) traversal bug dropping telemetry frames.",
             elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_gui_handler_population_remains_stable() {
+        use rustylife_core::engine::Engine;
+        use rustylife_core::space::Space;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let space = Arc::new(Space::<4>::new(rustylife_core::BUCKET_COUNT));
+        let engine = Engine::<4>::new(space.clone(), 4);
+
+        // Seed massive block of 250,000 cells directly
+        for i in 0..500 {
+            for j in 0..500 {
+                engine.place_cell(i * 10, j * 10);
+            }
+        }
+
+        // Wait for workers to place the cells
+        while engine.work_queue_in_flight() > 0 {
+            std::thread::yield_now();
+        }
+
+        // Setup GUI state
+        let state = Arc::new(Mutex::new(rustylife_gui::AppState {
+            is_running: true,
+            ..Default::default()
+        }));
+
+        // Start the engine
+        engine.start();
+
+        let state_clone = state.clone();
+        let engine_clone = engine.clone();
+        let thread_handle = std::thread::spawn(move || {
+            let mut handler = ServerActionHandler {
+                engine: engine_clone,
+                state: state_clone,
+            };
+            let mut mismatched_pop_count = 0;
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_millis(150) {
+                // Request state with viewport to trigger population read
+                handler.request_state(0, Some(((-10, -10), (10, 10))));
+
+                let (generation_id, pop) = {
+                    let s = handler.state.lock().unwrap();
+                    (s.generation, s.population)
+                };
+
+                // If the generation is 0, population must be exactly 250,000.
+                // If the generation has advanced, population must be exactly 0 (since all cells die).
+                if generation_id == 0 {
+                    if pop != 250_000 {
+                        mismatched_pop_count += 1;
+                    }
+                } else if pop != 0 {
+                    mismatched_pop_count += 1;
+                }
+                std::thread::yield_now();
+            }
+            mismatched_pop_count
+        });
+
+        std::thread::sleep(Duration::from_millis(150));
+        engine.stop();
+
+        let mismatches = thread_handle.join().unwrap();
+        assert_eq!(
+            mismatches, 0,
+            "GUI state population fluctuated/mismatched expected population {} times!",
+            mismatches
         );
     }
 }

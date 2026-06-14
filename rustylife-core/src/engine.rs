@@ -227,6 +227,7 @@ pub struct Engine<const N: usize = 4> {
     pub target_generation: AtomicU64,
     pub living_count: AtomicU64,
     pub stable_population: AtomicU64,
+    pub commit_seq: AtomicU64,
     pub work: AtomicU64,
     pub net: AtomicI64,
     pub dead_block_count: AtomicU64, // Metric for pruning trigger
@@ -239,6 +240,8 @@ pub struct Engine<const N: usize = 4> {
     pub telemetry: Mutex<Telemetry>,
     #[allow(clippy::type_complexity)]
     pub current_generation_bounds: Mutex<Option<((i128, i128), (i128, i128))>>,
+    #[allow(clippy::type_complexity)]
+    pub stable_bounds: Mutex<Option<((i128, i128), (i128, i128))>>,
     pub transition_lock: Mutex<()>,
 
     // Synchronization for phases
@@ -294,6 +297,7 @@ impl<const N: usize> Engine<N> {
             target_generation: AtomicU64::new(u64::MAX),
             living_count: AtomicU64::new(initial_pop),
             stable_population: AtomicU64::new(initial_pop),
+            commit_seq: AtomicU64::new(0),
             work: AtomicU64::new(0),
             net: AtomicI64::new(0), // AtomicI64
             dead_block_count: AtomicU64::new(0),
@@ -309,6 +313,7 @@ impl<const N: usize> Engine<N> {
             patterns: Mutex::new(Vec::new()),
             active_pattern: Mutex::new(None),
             current_generation_bounds: Mutex::new(None),
+            stable_bounds: Mutex::new(None),
             transition_lock: Mutex::new(()),
             io_tx,
             command_tx,
@@ -443,9 +448,11 @@ impl<const N: usize> Engine<N> {
             crate::cell::CellState::Alive,
             mask,
         ));
+        self.commit_seq.fetch_add(1, Ordering::SeqCst);
         self.living_count.fetch_add(1, Ordering::SeqCst);
         let final_pop = self.living_count.load(Ordering::SeqCst);
         self.stable_population.store(final_pop, Ordering::SeqCst);
+        self.commit_seq.fetch_add(1, Ordering::SeqCst);
     }
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
@@ -659,6 +666,7 @@ impl<const N: usize> Engine<N> {
                     }
                     self.space.clear();
                     self.space.mask.reset();
+                    self.commit_seq.fetch_add(1, Ordering::SeqCst);
                     self.generation.store(0, Ordering::SeqCst);
                     let maybe_rle = self.active_pattern.lock().unwrap().clone();
                     if let Some(rle) = maybe_rle {
@@ -668,7 +676,10 @@ impl<const N: usize> Engine<N> {
                     self.living_count.store(pop, Ordering::SeqCst);
                     self.stable_population.store(pop, Ordering::SeqCst);
                     self.stopping.store(true, Ordering::SeqCst);
-                    *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
+                    let bounds = self.space.bounds();
+                    *self.current_generation_bounds.lock().unwrap() = bounds;
+                    *self.stable_bounds.lock().unwrap() = bounds;
+                    self.commit_seq.fetch_add(1, Ordering::SeqCst);
                     self.capture_state(false);
                 }
                 EngineCommand::Seed(pattern_input) => {
@@ -677,6 +688,7 @@ impl<const N: usize> Engine<N> {
                     }
                     self.space.clear();
                     self.space.mask.reset();
+                    self.commit_seq.fetch_add(1, Ordering::SeqCst);
                     self.generation.store(0, Ordering::SeqCst);
                     let rle = {
                         let patterns = self.patterns.lock().unwrap();
@@ -692,7 +704,10 @@ impl<const N: usize> Engine<N> {
                     self.living_count.store(pop, Ordering::SeqCst);
                     self.stable_population.store(pop, Ordering::SeqCst);
                     self.stopping.store(true, Ordering::SeqCst);
-                    *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
+                    let bounds = self.space.bounds();
+                    *self.current_generation_bounds.lock().unwrap() = bounds;
+                    *self.stable_bounds.lock().unwrap() = bounds;
+                    self.commit_seq.fetch_add(1, Ordering::SeqCst);
                     self.capture_state(false);
                 }
                 EngineCommand::SeedAndStart(pattern_input, target_gen) => {
@@ -701,6 +716,7 @@ impl<const N: usize> Engine<N> {
                     }
                     self.space.clear();
                     self.space.mask.reset();
+                    self.commit_seq.fetch_add(1, Ordering::SeqCst);
                     self.generation.store(0, Ordering::SeqCst);
                     let rle = {
                         let patterns = self.patterns.lock().unwrap();
@@ -717,8 +733,11 @@ impl<const N: usize> Engine<N> {
                     self.stable_population.store(pop, Ordering::SeqCst);
                     self.target_generation.store(target_gen, Ordering::SeqCst);
                     self.stopping.store(false, Ordering::SeqCst);
-                    *self.current_generation_bounds.lock().unwrap() = self.space.bounds();
+                    let bounds = self.space.bounds();
+                    *self.current_generation_bounds.lock().unwrap() = bounds;
+                    *self.stable_bounds.lock().unwrap() = bounds;
                     self.telemetry.lock().unwrap().reset();
+                    self.commit_seq.fetch_add(1, Ordering::SeqCst);
                     // Emit a Gen-0 snapshot so subscribers see the initial state
                     // before the first generation completes.
                     self.capture_state(true);
@@ -1078,11 +1097,29 @@ impl<const N: usize> Engine<N> {
 
         let prev = engine.phase_counter.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
+            engine.commit_seq.fetch_add(1, Ordering::SeqCst);
+
             let final_pop = engine.living_count.load(Ordering::SeqCst);
             engine.stable_population.store(final_pop, Ordering::SeqCst);
 
+            // Copy the fully-computed bounds to stable_bounds
+            {
+                let bounds = *engine.current_generation_bounds.lock().unwrap();
+                *engine.stable_bounds.lock().unwrap() = bounds;
+            }
+
             // Generation is complete
             let curr_gen = engine.generation.load(Ordering::SeqCst);
+
+            // Update telemetry rates for the completed generation BEFORE advancing generation counter
+            let work = engine.work.load(Ordering::SeqCst);
+            let net = engine.net.load(Ordering::SeqCst);
+            engine
+                .telemetry
+                .lock()
+                .unwrap()
+                .update(curr_gen + 1, work, net);
+
             let target = engine.target_generation.load(Ordering::SeqCst);
             if curr_gen + 1 >= target {
                 engine.stopping.store(true, Ordering::SeqCst);
@@ -1091,6 +1128,8 @@ impl<const N: usize> Engine<N> {
             // Advance generation to commit the data we just calculated
             engine.space.advance_generation();
             engine.generation.fetch_add(1, Ordering::SeqCst);
+
+            engine.commit_seq.fetch_add(1, Ordering::SeqCst);
 
             let stopping_at_capture = engine.stopping.load(Ordering::SeqCst);
             engine.capture_state(!stopping_at_capture);
@@ -1109,63 +1148,84 @@ impl<const N: usize> Engine<N> {
     }
 
     pub fn capture_metrics_only(&self) -> crate::Telemetry {
-        let generation = self.generation.load(Ordering::SeqCst);
-        let living_count = self.stable_population.load(Ordering::SeqCst) as usize;
+        loop {
+            let seq_before = self.commit_seq.load(Ordering::SeqCst);
+            if (seq_before & 1) != 0 {
+                std::thread::yield_now();
+                continue;
+            }
 
-        let (gps, work_rate, net_rate) = {
-            let t = self.telemetry.lock().unwrap();
-            (t.gps, t.work_rate_ema, t.net_rate_ema)
-        };
-        let bounds = *self.current_generation_bounds.lock().unwrap();
-        let is_running = !self.stopping.load(Ordering::SeqCst);
+            let gen_val = self.generation.load(Ordering::SeqCst);
+            let living_count = self.stable_population.load(Ordering::SeqCst) as usize;
 
-        crate::Telemetry {
-            generation,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
-            population: living_count as u64,
-            is_running,
-            gps,
-            work_rate,
-            net_rate,
-            bounds: crate::Telemetry::to_cartesian_bounds(bounds),
+            let (gps, work_rate, net_rate) = {
+                let t = self.telemetry.lock().unwrap();
+                (t.gps, t.work_rate_ema, t.net_rate_ema)
+            };
+            let bounds = *self.stable_bounds.lock().unwrap();
+            let is_running = !self.stopping.load(Ordering::SeqCst);
+
+            let seq_after = self.commit_seq.load(Ordering::SeqCst);
+            if seq_before == seq_after {
+                return crate::Telemetry {
+                    generation: gen_val,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64,
+                    population: living_count as u64,
+                    is_running,
+                    gps,
+                    work_rate,
+                    net_rate,
+                    bounds: crate::Telemetry::to_cartesian_bounds(bounds),
+                };
+            }
         }
     }
 
     #[allow(clippy::type_complexity)]
     pub fn capture_current_state(&self) -> (Vec<((i128, i128), u8)>, crate::Telemetry) {
-        let generation = self.generation.load(Ordering::SeqCst);
-        // We now just allocate a fresh Vector per generation for zero-copy ownership transfer
-        let living_count = self.stable_population.load(Ordering::SeqCst) as usize;
-        let mut vec = Vec::with_capacity(living_count + (living_count / 4));
+        loop {
+            let seq_before = self.commit_seq.load(Ordering::SeqCst);
+            if (seq_before & 1) != 0 {
+                std::thread::yield_now();
+                continue;
+            }
 
-        self.space.collect_all_states_into(&mut vec);
+            let gen_val = self.generation.load(Ordering::SeqCst);
+            let living_count = self.stable_population.load(Ordering::SeqCst) as usize;
+            let mut vec = Vec::with_capacity(living_count + (living_count / 4));
 
-        // Capture telemetry synchronously
-        let (gps, work_rate, net_rate) = {
-            let t = self.telemetry.lock().unwrap();
-            (t.gps, t.work_rate_ema, t.net_rate_ema)
-        };
-        let bounds = *self.current_generation_bounds.lock().unwrap();
-        let is_running = !self.stopping.load(Ordering::SeqCst);
+            self.space.collect_all_states_into(&mut vec);
 
-        let telemetry = crate::Telemetry {
-            generation,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64,
-            population: living_count as u64,
-            is_running,
-            gps,
-            work_rate,
-            net_rate,
-            bounds: crate::Telemetry::to_cartesian_bounds(bounds),
-        };
+            // Capture telemetry synchronously
+            let (gps, work_rate, net_rate) = {
+                let t = self.telemetry.lock().unwrap();
+                (t.gps, t.work_rate_ema, t.net_rate_ema)
+            };
+            let bounds = *self.stable_bounds.lock().unwrap();
+            let is_running = !self.stopping.load(Ordering::SeqCst);
 
-        (vec, telemetry)
+            let seq_after = self.commit_seq.load(Ordering::SeqCst);
+            if seq_before == seq_after {
+                let telemetry = crate::Telemetry {
+                    generation: gen_val,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64,
+                    population: living_count as u64,
+                    is_running,
+                    gps,
+                    work_rate,
+                    net_rate,
+                    bounds: crate::Telemetry::to_cartesian_bounds(bounds),
+                };
+
+                return (vec, telemetry);
+            }
+        }
     }
 
     fn capture_state(&self, _is_running: bool) {
@@ -1173,8 +1233,15 @@ impl<const N: usize> Engine<N> {
         let work = self.work.load(Ordering::SeqCst); // Accumulator
         let net = self.net.load(Ordering::SeqCst);
 
-        // Update Telemetry FIRST to accurately measure the computation time of this generation
-        self.telemetry.lock().unwrap().update(generation, work, net);
+        // Update Telemetry only if it hasn't been updated for this generation yet.
+        // During the commit phase, we update it before incrementing self.generation.
+        // But for commands (Reset, Seed, SeedAndStart), it needs to be updated here.
+        {
+            let mut t = self.telemetry.lock().unwrap();
+            if t.last_generation != generation || generation == 0 {
+                t.update(generation, work, net);
+            }
+        }
 
         // Check for Pruning Trigger
         let dead_blocks = self.dead_block_count.load(Ordering::SeqCst);
