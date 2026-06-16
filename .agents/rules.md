@@ -22,7 +22,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 - **Exhaustive help**: Ensure all `clap` arguments have an `about` or `help` string so `--help` is fully descriptive.
 
 ## Communication
-- **No New Acronyms**: Do not create or use acronyms (e.g., "STW") unless they have been first introduced by the USER. "OOM" is an exception as it is already established in the project context.
+- **No New Acronyms**: Do not create or use acronyms (e.g., "STW") unless they have been first introduced by the USER. "OOM" and "UI" are exceptions as they are established in the project context.
 
 ## Licensing
 - **License Maintenance**: All source files (`.rs`, `.js`, `.ts`, etc.) must maintain the GPL-3.0 copyright headers. No new files should be committed without these headers once the licensing task is complete.

@@ -53,6 +53,16 @@ describe('Dashboard Panning & Zooming', () => {
             clearRect: vi.fn()
         };
         HTMLCanvasElement.prototype.getContext = vi.fn(() => mockCtx);
+        HTMLCanvasElement.prototype.getBoundingClientRect = vi.fn(() => ({
+            left: 0,
+            top: 0,
+            width: 800,
+            height: 600,
+            right: 800,
+            bottom: 600
+        }));
+        Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get: () => 800, configurable: true });
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', { get: () => 600, configurable: true });
 
         global.WebSocket = class {
             constructor() {
@@ -250,6 +260,66 @@ describe('Dashboard Panning & Zooming', () => {
             
             // Should be set to full width
             expect(containerCss).toContain('width: 100%');
+        });
+    });
+
+    describe('Touch Events Panning and Zooming', () => {
+        it('should pan the viewport using touch events', async () => {
+            await import('../static/dashboard.js');
+            await new Promise(r => setTimeout(r, 10));
+
+            const canvas = document.getElementById('sim-canvas');
+            const centerEl = document.getElementById('center-display');
+            const initialCenter = centerEl.innerHTML;
+
+            // Simulate touchstart (single finger at 100,100)
+            const startEvent = new Event('touchstart', { bubbles: true });
+            startEvent.touches = [{ clientX: 100, clientY: 100 }];
+            canvas.dispatchEvent(startEvent);
+
+            // Simulate touchmove (drag to 150,150)
+            const moveEvent = new Event('touchmove', { bubbles: true });
+            moveEvent.touches = [{ clientX: 150, clientY: 150 }];
+            window.dispatchEvent(moveEvent);
+
+            // Simulate touchend
+            const endEvent = new Event('touchend', { bubbles: true });
+            window.dispatchEvent(endEvent);
+
+            // Center display should have updated since we panned
+            expect(centerEl.innerHTML).not.toBe(initialCenter);
+        });
+
+        it('should zoom the viewport using dual-touch pinch gestures', async () => {
+            await import('../static/dashboard.js');
+            await new Promise(r => setTimeout(r, 10));
+
+            const canvas = document.getElementById('sim-canvas');
+            const zoomEl = document.getElementById('zoom-display');
+            const initialZoom = zoomEl.innerHTML;
+
+            // Start pinch at distance 100px: touches at (100, 100) and (200, 100)
+            const startEvent = new Event('touchstart', { bubbles: true });
+            startEvent.touches = [
+                { clientX: 100, clientY: 100 },
+                { clientX: 200, clientY: 100 }
+            ];
+            canvas.dispatchEvent(startEvent);
+
+            // Move touches to make distance 300px: touches at (100, 100) and (400, 100)
+            const moveEvent = new Event('touchmove', { bubbles: true });
+            moveEvent.touches = [
+                { clientX: 100, clientY: 100 },
+                { clientX: 400, clientY: 100 }
+            ];
+            window.dispatchEvent(moveEvent);
+
+            // Release touches
+            const endEvent = new Event('touchend', { bubbles: true });
+            window.dispatchEvent(endEvent);
+
+            // Zoom display should have updated
+            expect(zoomEl.innerHTML).not.toBe(initialZoom);
         });
     });
 });

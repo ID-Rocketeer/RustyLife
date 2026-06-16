@@ -39,7 +39,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             overflow: hidden;
             /* Canvas will resize to container */
             height: 100vh;
+            height: 100dvh;
             width: 100vw;
+            width: 100dvw;
         }
 
         .container {
@@ -65,7 +67,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
         .header-controls {
             display: grid;
-            grid-template-columns: minmax(150px, 1fr) auto minmax(150px, 1fr);
+            grid-template-columns: minmax(100px, 1fr) auto minmax(150px, 1fr);
             align-items: center;
             margin-bottom: 0.5rem;
             gap: 1rem;
@@ -104,7 +106,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             display: flex;
             justify-content: center;
             gap: 0.5rem;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
         }
 
         button {
@@ -170,6 +172,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
         .canvas-container {
             position: relative; /* Anchor absolute children */
             flex: 1;
+            min-height: 0; /* Allow the container to shrink below content size */
             background: #000000;
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 0.5rem;
@@ -268,6 +271,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             width: 100%;
             height: 100%;
             image-rendering: pixelated;
+            touch-action: none;
         }
 
         .footer-container {
@@ -358,6 +362,100 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             background: #10b981;
             box-shadow: 0 0 5px #10b981;
         }
+
+        /* Use compact controls on all screens with limited width, independent of 1-row vs 2-row layout */
+        @media (max-width: 1199px) {
+            button {
+                padding: 0.35rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            select {
+                padding: 0.35rem 0.5rem;
+                font-size: 0.75rem;
+            }
+            .controls {
+                gap: 0.35rem;
+            }
+            .header-controls {
+                gap: 0.5rem;
+            }
+        }
+
+        /* Switch to 2-row layout when horizontal space is constrained (< 768px) */
+        @media (max-width: 767px) {
+            .header-controls {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                grid-template-areas: 
+                    "left right"
+                    "center center";
+                gap: 0.5rem;
+                align-items: center;
+                margin-bottom: 0.25rem;
+            }
+            .header-controls > div {
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                justify-content: center;
+                width: 100%;
+                text-align: center;
+            }
+            .header-controls > div:first-child {
+                grid-area: left;
+                justify-self: start;
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 0.75rem;
+                width: auto;
+            }
+            h1 {
+                margin: 0;
+                font-size: 1.25rem;
+                text-align: left;
+            }
+            .generation-info {
+                font-size: 0.85rem;
+                text-align: left;
+            }
+            .controls {
+                grid-area: center;
+                justify-self: center;
+                width: 100%;
+                justify-content: center;
+                gap: 0.25rem;
+                flex-wrap: wrap;
+            }
+            .header-controls > div:last-child {
+                grid-area: right;
+                justify-self: end;
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 0.75rem;
+                width: auto;
+            }
+            .population-info {
+                text-align: right;
+                align-items: flex-end;
+                font-size: 0.85rem;
+            }
+            /* Compact footer status layouts on mobile */
+            .footer-status {
+                gap: 0.75rem;
+                font-size: 0.65rem;
+                padding: 1px 4px;
+            }
+            .instrument-label {
+                font-size: 0.55rem;
+            }
+            .connection-status {
+                min-width: 90px;
+            }
+        }
+
+
     </style>
 </head>
 

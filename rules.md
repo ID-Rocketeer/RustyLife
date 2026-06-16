@@ -5,6 +5,7 @@ To prevent confusion and obfuscation, only use the following approved acronyms i
 - **OOM**: Out-Of-Memory
 - **CP**: Control Plane
 - **DP**: Data Plane
+- **UI**: User Interface
 
 *Do NOT invent new acronyms (e.g., do not use "GoL" for Game of Life). Always use plain text.*
 

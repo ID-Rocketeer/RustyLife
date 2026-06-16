@@ -82,6 +82,141 @@ impl RustyLifeApp {
     pub(crate) fn sync_generation(&mut self, generation: u64) {
         self.last_generation = generation;
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_controls_ui(
+        ui: &mut egui::Ui,
+        btn_h: f32,
+        is_running: bool,
+        states: usize,
+        handler: &mut dyn UserActionHandler,
+        projection: &mut crate::projection::ViewProjection,
+        color_mode: &mut ColorMode,
+        show_color_key: &mut bool,
+        patterns: &[rustylife_core::PatternInfo],
+    ) {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.spacing_mut().button_padding = egui::vec2(8.0, (btn_h - 15.0) / 2.0);
+
+        // Media Controls (Consistently bright)
+        let play_icon = if is_running { "⏸" } else { "▶" };
+        if ui
+            .add(
+                MediaButton::new(play_icon, true, Color32::WHITE).with_size(Vec2::new(34.0, btn_h)),
+            )
+            .on_hover_text("Play / Pause")
+            .clicked()
+        {
+            if is_running {
+                handler.stop();
+            } else {
+                handler.start();
+            }
+        }
+
+        if ui
+            .add_enabled(
+                !is_running,
+                MediaButton::new("⏯", true, Color32::WHITE).with_size(Vec2::new(34.0, btn_h)),
+            )
+            .on_hover_text("Step Generation")
+            .clicked()
+        {
+            handler.step();
+        }
+
+        if ui
+            .add_enabled(
+                !is_running,
+                MediaButton::new("⏮", true, Color32::WHITE).with_size(Vec2::new(34.0, btn_h)),
+            )
+            .on_hover_text("Reset Simulation")
+            .clicked()
+        {
+            handler.reset();
+        }
+
+        ui.add_space(4.0);
+
+        // Navigation Controls
+        let nav_style = |text: &str| {
+            egui::Button::new(egui::RichText::new(text).size(15.0).strong())
+                .min_size(Vec2::new(0.0, btn_h))
+        };
+
+        if ui.add_sized([54.0, btn_h], nav_style("Origin")).clicked() {
+            projection.offset = Vec2::ZERO;
+        }
+
+        ui.add_enabled_ui(!is_running, |ui| {
+            ui.menu_button(egui::RichText::new("Patterns").size(15.0).strong(), |ui| {
+                ui.set_min_width(120.0);
+                for p in patterns {
+                    if ui
+                        .button(p.name.clone())
+                        .on_hover_text(p.description.clone())
+                        .clicked()
+                    {
+                        handler.seed(p.name.clone());
+                        ui.close_menu();
+                    }
+                }
+            })
+            .response
+            .on_hover_text(if is_running {
+                "Stop the simulation before changing patterns"
+            } else {
+                "Load a pattern"
+            });
+        });
+
+        let mode_label = match color_mode {
+            ColorMode::Classic => "Classic",
+            ColorMode::BiState => "Bi-State",
+            ColorMode::TriState => "Tri-State",
+        };
+
+        let color_btn = egui::Button::new(egui::RichText::new(mode_label).size(15.0).strong())
+            .min_size(Vec2::new(0.0, btn_h));
+
+        let color_btn_resp = ui.add_enabled_ui(states > 1, |ui| {
+            if ui.add_sized([80.0, btn_h], color_btn).clicked() {
+                *color_mode = match (states, *color_mode) {
+                    (2, ColorMode::Classic) => ColorMode::BiState,
+                    (2, ColorMode::BiState) => ColorMode::Classic,
+                    (2, _) => ColorMode::BiState,
+                    (_, ColorMode::Classic) => ColorMode::BiState,
+                    (_, ColorMode::BiState) => ColorMode::TriState,
+                    (_, ColorMode::TriState) => ColorMode::Classic,
+                };
+            }
+        });
+
+        color_btn_resp.response.on_hover_text(if states <= 1 {
+            "Color mode switching is disabled (mono-state depth)"
+        } else {
+            "Cycle cell presentation mode"
+        });
+
+        // Color Key / Legend Toggle Button
+        let key_btn = egui::Button::new(egui::RichText::new("?").size(15.0).strong())
+            .min_size(Vec2::new(0.0, btn_h));
+
+        if ui
+            .add_sized([30.0, btn_h], key_btn)
+            .on_hover_text("Show Color Key / Legend")
+            .clicked()
+        {
+            *show_color_key = !*show_color_key;
+        }
+
+        if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
+            projection.zoom_at_center(1.0);
+        }
+        if ui.add_sized([40.0, btn_h], nav_style("-")).clicked() {
+            projection.zoom_at_center(-1.0);
+        }
+    }
 }
 
 impl eframe::App for RustyLifeApp {
@@ -182,234 +317,242 @@ impl eframe::App for RustyLifeApp {
         egui::TopBottomPanel::top("header")
             .min_height(48.0)
             .show(ctx, |ui| {
-                ui.columns(3, |columns| {
-                    // --- COLUMN 1: LEFT (Title & Generation) ---
-                    columns[0].vertical(|ui| {
-                        ui.set_height(48.0);
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.style_mut().spacing.item_spacing.x = 0.0;
-                                let text = "RustyLife";
-                                let start = crate::style::COLOR_TITLE_START;
-                                let end = crate::style::COLOR_TITLE_END;
-                                for (i, c) in text.chars().enumerate() {
-                                    let t = i as f32 / (text.len() as f32 - 1.0);
-                                    let r = (start.r() as f32
-                                        + (end.r() as f32 - start.r() as f32) * t)
-                                        as u8;
-                                    let g = (start.g() as f32
-                                        + (end.g() as f32 - start.g() as f32) * t)
-                                        as u8;
-                                    let b = (start.b() as f32
-                                        + (end.b() as f32 - start.b() as f32) * t)
-                                        as u8;
-                                    ui.label(
-                                        egui::RichText::new(c.to_string())
-                                            .size(22.0)
-                                            .strong()
-                                            .color(egui::Color32::from_rgb(r, g, b)),
-                                    );
-                                }
+                let available_width = ui.available_width();
+                let patterns = self.state.lock().unwrap().patterns.clone();
+                let handler = &mut *self.handler;
+                let projection = &mut self.projection;
+                let color_mode = &mut self.color_mode;
+                let show_color_key = &mut self.show_color_key;
+
+                if available_width < 820.0 {
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            // Left Title & Gen
+                            ui.vertical(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.style_mut().spacing.item_spacing.x = 0.0;
+                                    let text = "RustyLife";
+                                    let start = crate::style::COLOR_TITLE_START;
+                                    let end = crate::style::COLOR_TITLE_END;
+                                    for (i, c) in text.chars().enumerate() {
+                                        let t = i as f32 / (text.len() as f32 - 1.0);
+                                        let r = (start.r() as f32
+                                            + (end.r() as f32 - start.r() as f32) * t)
+                                            as u8;
+                                        let g = (start.g() as f32
+                                            + (end.g() as f32 - start.g() as f32) * t)
+                                            as u8;
+                                        let b = (start.b() as f32
+                                            + (end.b() as f32 - start.b() as f32) * t)
+                                            as u8;
+                                        ui.label(
+                                            egui::RichText::new(c.to_string())
+                                                .size(20.0)
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(r, g, b)),
+                                        );
+                                    }
+                                });
+                                ui.label(
+                                    egui::RichText::new(format!("Gen: {}", generation))
+                                        .size(12.0)
+                                        .strong()
+                                        .monospace()
+                                        .color(ui.visuals().weak_text_color()),
+                                );
                             });
-                            ui.label(
-                                egui::RichText::new(format!("Gen: {}", generation))
-                                    .size(13.0)
-                                    .strong()
-                                    .monospace()
-                                    .color(ui.visuals().weak_text_color()),
+
+                            // Right Stats & Quit
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // Quit Button
+                                    if ui
+                                        .add_sized(
+                                            [54.0, 28.0],
+                                            egui::Button::new(
+                                                egui::RichText::new("Quit")
+                                                    .size(13.0)
+                                                    .strong()
+                                                    .color(Color32::WHITE),
+                                            )
+                                            .fill(Color32::from_rgb(180, 0, 0)),
+                                        )
+                                        .on_hover_text("Shuts down the simulation server")
+                                        .clicked()
+                                    {
+                                        handler.shutdown();
+                                    }
+
+                                    ui.add_space(8.0);
+
+                                    // Population Stats
+                                    ui.vertical(|ui| {
+                                        ui.with_layout(
+                                            egui::Layout::top_down(egui::Align::Max),
+                                            |ui| {
+                                                ui.spacing_mut().item_spacing.y = 0.0;
+                                                ui.label(
+                                                    egui::RichText::new("Population")
+                                                        .size(9.0)
+                                                        .strong()
+                                                        .color(ui.visuals().weak_text_color()),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(fmt_num(
+                                                        population as i64,
+                                                        0,
+                                                        false,
+                                                    ))
+                                                    .size(14.0)
+                                                    .strong()
+                                                    .monospace(),
+                                                );
+                                            },
+                                        );
+                                    });
+                                },
                             );
                         });
-                    });
 
-                    // --- COLUMN 2: CENTER (Simulation Controls) ---
-                    columns[1].vertical_centered(|ui| {
-                        ui.set_height(48.0);
-                        ui.add_space(7.0);
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        // Centered Controls Group
                         ui.horizontal_centered(|ui| {
-                            let btn_h = 34.0;
-                            ui.spacing_mut().item_spacing.x = 8.0;
-
-                            // Media Controls (Consistently bright)
-                            let play_icon = if is_running { "⏸" } else { "▶" };
-                            if ui
-                                .add(
-                                    MediaButton::new(play_icon, true, Color32::WHITE)
-                                        .with_size(Vec2::new(34.0, btn_h)),
-                                )
-                                .on_hover_text("Play / Pause")
-                                .clicked()
-                            {
-                                if is_running {
-                                    self.handler.stop();
-                                } else {
-                                    self.handler.start();
-                                }
-                            }
-
-                            if ui
-                                .add_enabled(
-                                    !is_running,
-                                    MediaButton::new("⏯", true, Color32::WHITE)
-                                        .with_size(Vec2::new(34.0, btn_h)),
-                                )
-                                .on_hover_text("Step Generation")
-                                .clicked()
-                            {
-                                self.handler.step();
-                            }
-
-                            if ui
-                                .add_enabled(
-                                    !is_running,
-                                    MediaButton::new("⏮", true, Color32::WHITE)
-                                        .with_size(Vec2::new(34.0, btn_h)),
-                                )
-                                .on_hover_text("Reset Simulation")
-                                .clicked()
-                            {
-                                self.handler.reset();
-                            }
-
-                            ui.add_space(4.0);
-
-                            // Navigation Controls
-                            let nav_style = |text: &str| {
-                                egui::Button::new(egui::RichText::new(text).size(15.0).strong())
-                                    .min_size(Vec2::new(0.0, btn_h))
-                            };
-
-                            if ui.add_sized([54.0, btn_h], nav_style("Origin")).clicked() {
-                                self.projection.offset = Vec2::ZERO;
-                            }
-
-                            ui.add_enabled_ui(!is_running, |ui| {
-                                ui.menu_button(
-                                    egui::RichText::new("Patterns").size(15.0).strong(),
-                                    |ui| {
-                                        ui.set_min_width(120.0);
-                                        let patterns = self.state.lock().unwrap().patterns.clone();
-                                        for p in patterns {
-                                            if ui
-                                                .button(p.name.clone())
-                                                .on_hover_text(p.description)
-                                                .clicked()
-                                            {
-                                                self.handler.seed(p.name);
-                                                ui.close_menu();
-                                            }
-                                        }
-                                    },
-                                )
-                                .response
-                                .on_hover_text(if is_running {
-                                    "Stop the simulation before changing patterns"
-                                } else {
-                                    "Load a pattern"
-                                });
-                            });
-
-                            let mode_label = match self.color_mode {
-                                ColorMode::Classic => "Classic",
-                                ColorMode::BiState => "Bi-State",
-                                ColorMode::TriState => "Tri-State",
-                            };
-
-                            let color_btn = egui::Button::new(
-                                egui::RichText::new(mode_label).size(15.0).strong(),
-                            )
-                            .min_size(Vec2::new(0.0, btn_h));
-
-                            let color_btn_resp = ui.add_enabled_ui(states > 1, |ui| {
-                                if ui.add_sized([80.0, btn_h], color_btn).clicked() {
-                                    self.color_mode = match (states, self.color_mode) {
-                                        (2, ColorMode::Classic) => ColorMode::BiState,
-                                        (2, ColorMode::BiState) => ColorMode::Classic,
-                                        (2, _) => ColorMode::BiState,
-                                        (_, ColorMode::Classic) => ColorMode::BiState,
-                                        (_, ColorMode::BiState) => ColorMode::TriState,
-                                        (_, ColorMode::TriState) => ColorMode::Classic,
-                                    };
-                                }
-                            });
-
-                            color_btn_resp.response.on_hover_text(if states <= 1 {
-                                "Color mode switching is disabled (mono-state depth)"
-                            } else {
-                                "Cycle cell presentation mode"
-                            });
-
-                            // Color Key / Legend Toggle Button
-                            let key_btn =
-                                egui::Button::new(egui::RichText::new("?").size(15.0).strong())
-                                    .min_size(Vec2::new(0.0, btn_h));
-
-                            if ui
-                                .add_sized([30.0, btn_h], key_btn)
-                                .on_hover_text("Show Color Key / Legend")
-                                .clicked()
-                            {
-                                self.show_color_key = !self.show_color_key;
-                            }
-
-                            if ui.add_sized([40.0, btn_h], nav_style("+")).clicked() {
-                                self.projection.zoom_at_center(1.0);
-                            }
-                            if ui.add_sized([40.0, btn_h], nav_style("-")).clicked() {
-                                self.projection.zoom_at_center(-1.0);
-                            }
+                            RustyLifeApp::draw_controls_ui(
+                                ui,
+                                30.0,
+                                is_running,
+                                states,
+                                handler,
+                                projection,
+                                color_mode,
+                                show_color_key,
+                                &patterns,
+                            );
                         });
+                        ui.add_space(4.0);
                     });
-
-                    // --- COLUMN 3: RIGHT (Metrics & Exit) ---
-                    columns[2].with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
+                } else {
+                    ui.columns(3, |columns| {
+                        // --- COLUMN 1: LEFT (Title & Generation) ---
+                        columns[0].vertical(|ui| {
                             ui.set_height(48.0);
-                            ui.add_space(10.0);
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.style_mut().spacing.item_spacing.x = 0.0;
+                                    let text = "RustyLife";
+                                    let start = crate::style::COLOR_TITLE_START;
+                                    let end = crate::style::COLOR_TITLE_END;
+                                    for (i, c) in text.chars().enumerate() {
+                                        let t = i as f32 / (text.len() as f32 - 1.0);
+                                        let r = (start.r() as f32
+                                            + (end.r() as f32 - start.r() as f32) * t)
+                                            as u8;
+                                        let g = (start.g() as f32
+                                            + (end.g() as f32 - start.g() as f32) * t)
+                                            as u8;
+                                        let b = (start.b() as f32
+                                            + (end.b() as f32 - start.b() as f32) * t)
+                                            as u8;
+                                        ui.label(
+                                            egui::RichText::new(c.to_string())
+                                                .size(22.0)
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(r, g, b)),
+                                        );
+                                    }
+                                });
+                                ui.label(
+                                    egui::RichText::new(format!("Gen: {}", generation))
+                                        .size(13.0)
+                                        .strong()
+                                        .monospace()
+                                        .color(ui.visuals().weak_text_color()),
+                                );
+                            });
+                        });
 
-                            // Quit Button
-                            if ui
-                                .add_sized(
-                                    [64.0, 34.0],
-                                    egui::Button::new(
-                                        egui::RichText::new("Quit")
-                                            .size(15.0)
-                                            .strong()
-                                            .color(Color32::WHITE),
+                        // --- COLUMN 2: CENTER (Simulation Controls) ---
+                        columns[1].vertical_centered(|ui| {
+                            ui.set_height(48.0);
+                            ui.add_space(7.0);
+                            ui.horizontal_centered(|ui| {
+                                RustyLifeApp::draw_controls_ui(
+                                    ui,
+                                    34.0,
+                                    is_running,
+                                    states,
+                                    handler,
+                                    projection,
+                                    color_mode,
+                                    show_color_key,
+                                    &patterns,
+                                );
+                            });
+                        });
+
+                        // --- COLUMN 3: RIGHT (Metrics & Exit) ---
+                        columns[2].with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.set_height(48.0);
+                                ui.add_space(10.0);
+
+                                // Quit Button
+                                if ui
+                                    .add_sized(
+                                        [64.0, 34.0],
+                                        egui::Button::new(
+                                            egui::RichText::new("Quit")
+                                                .size(15.0)
+                                                .strong()
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(180, 0, 0)),
                                     )
-                                    .fill(Color32::from_rgb(180, 0, 0)),
-                                )
-                                .on_hover_text("Shuts down the simulation server")
-                                .clicked()
-                            {
-                                self.handler.shutdown();
-                            }
+                                    .on_hover_text("Shuts down the simulation server")
+                                    .clicked()
+                                {
+                                    handler.shutdown();
+                                }
 
-                            ui.add_space(15.0);
+                                ui.add_space(15.0);
 
-                            // Population Stats
-                            ui.vertical(|ui| {
-                                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    ui.label(
-                                        egui::RichText::new("Population")
-                                            .size(10.0)
-                                            .strong()
-                                            .color(ui.visuals().weak_text_color()),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(fmt_num(population as i64, 0, false))
-                                            .size(16.0)
-                                            .strong()
-                                            .monospace(),
+                                // Population Stats
+                                ui.vertical(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::top_down(egui::Align::Max),
+                                        |ui| {
+                                            ui.spacing_mut().item_spacing.y = 0.0;
+                                            ui.label(
+                                                egui::RichText::new("Population")
+                                                    .size(10.0)
+                                                    .strong()
+                                                    .color(ui.visuals().weak_text_color()),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(fmt_num(
+                                                    population as i64,
+                                                    0,
+                                                    false,
+                                                ))
+                                                .size(16.0)
+                                                .strong()
+                                                .monospace(),
+                                            );
+                                        },
                                     );
                                 });
-                            });
-                        },
-                    );
-                });
-                ui.add_space(4.0);
+                            },
+                        );
+                    });
+                    ui.add_space(4.0);
+                }
             });
 
         // Footer
@@ -612,53 +755,61 @@ impl eframe::App for RustyLifeApp {
                     ui.horizontal(|ui| {
                         ui.style_mut().spacing.item_spacing.x = 0.0; // Tighten label-to-data spacing
 
-                        // Bounds (always display - already in Cartesian from server)
-                        let ((bx1, by1), (bx2, by2)) = bounds.unwrap_or(((0, 0), (0, 0)));
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new("BOUNDS:")
-                                    .color(crate::style::COLOR_LABEL)
-                                    .font(egui::FontId::proportional(11.0))
-                                    .strong()
-                                    .underline(),
-                            )
-                            .sense(egui::Sense::hover()),
-                        )
-                        .on_hover_text("Bounding box of all living cells");
-                        ui.monospace(
-                            egui::RichText::new(format!(
-                                "[ ({}, {}) -> ({}, {}) ]",
-                                fmt_coord(bx1, 9, true),
-                                fmt_coord(by1, 9, true),
-                                fmt_coord(bx2, 9, true),
-                                fmt_coord(by2, 9, true)
-                            ))
-                            .color(crate::style::COLOR_DATA),
-                        );
-                        ui.add_space(20.0);
+                        egui::ScrollArea::horizontal()
+                            .hscroll(true)
+                            .vscroll(false)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    // Bounds (always display - already in Cartesian from server)
+                                    let ((bx1, by1), (bx2, by2)) =
+                                        bounds.unwrap_or(((0, 0), (0, 0)));
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new("BOUNDS:")
+                                                .color(crate::style::COLOR_LABEL)
+                                                .font(egui::FontId::proportional(11.0))
+                                                .strong()
+                                                .underline(),
+                                        )
+                                        .sense(egui::Sense::hover()),
+                                    )
+                                    .on_hover_text("Bounding box of all living cells");
+                                    ui.monospace(
+                                        egui::RichText::new(format!(
+                                            "[ ({}, {}) -> ({}, {}) ]",
+                                            fmt_coord(bx1, 9, true),
+                                            fmt_coord(by1, 9, true),
+                                            fmt_coord(bx2, 9, true),
+                                            fmt_coord(by2, 9, true)
+                                        ))
+                                        .color(crate::style::COLOR_DATA),
+                                    );
+                                    ui.add_space(20.0);
 
-                        // Expanse (always display)
-                        let (exp_w, exp_h) = expanse;
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new("EXPANSE:")
-                                    .color(crate::style::COLOR_LABEL)
-                                    .font(egui::FontId::proportional(11.0))
-                                    .strong()
-                                    .underline(),
-                            )
-                            .sense(egui::Sense::hover()),
-                        )
-                        .on_hover_text("Width x Height of the bounding box");
-                        ui.monospace(
-                            egui::RichText::new(format!(
-                                "[ {} \u{00D7} {} ]",
-                                fmt_num(exp_w as i64, 9, false),
-                                fmt_num(exp_h as i64, 9, false)
-                            ))
-                            .color(crate::style::COLOR_DATA),
-                        );
-                        ui.add_space(20.0);
+                                    // Expanse (always display)
+                                    let (exp_w, exp_h) = expanse;
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new("EXPANSE:")
+                                                .color(crate::style::COLOR_LABEL)
+                                                .font(egui::FontId::proportional(11.0))
+                                                .strong()
+                                                .underline(),
+                                        )
+                                        .sense(egui::Sense::hover()),
+                                    )
+                                    .on_hover_text("Width x Height of the bounding box");
+                                    ui.monospace(
+                                        egui::RichText::new(format!(
+                                            "[ {} \u{00D7} {} ]",
+                                            fmt_num(exp_w as i64, 9, false),
+                                            fmt_num(exp_h as i64, 9, false)
+                                        ))
+                                        .color(crate::style::COLOR_DATA),
+                                    );
+                                });
+                            });
 
                         // Status (Right Aligned)
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

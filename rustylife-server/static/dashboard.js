@@ -85,6 +85,8 @@ let offsetY = 0;
 let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
+let activePointers = [];
+let lastPinchDist = 0;
 
 let latestTelemetry = null;
 let states = 3;
@@ -136,6 +138,7 @@ function updateInstrumentation() {
     zoomEl.innerHTML = `[ ${scale.toFixed(2).padStart(5, '0')}X ]`;
 }
 
+// Mouse Panning
 canvas.addEventListener('mousedown', (e) => {
     isDragging = true;
     lastMouseX = e.clientX;
@@ -164,6 +167,69 @@ window.addEventListener('mouseup', () => {
     }
 });
 
+// Touch Panning & Zooming
+let touchStartDist = 0;
+
+canvas.addEventListener('touchstart', (e) => {
+    if (e.touches && e.touches.length === 1) {
+        isDragging = true;
+        lastMouseX = e.touches[0].clientX;
+        lastMouseY = e.touches[0].clientY;
+        canvas.style.cursor = 'grabbing';
+    } else if (e.touches && e.touches.length === 2) {
+        isDragging = false;
+        touchStartDist = Math.hypot(
+            e.touches[1].clientX - e.touches[0].clientX,
+            e.touches[1].clientY - e.touches[0].clientY
+        );
+    }
+}, { passive: true });
+
+window.addEventListener('touchmove', (e) => {
+    if (!e.touches) return;
+    if (e.touches.length === 1 && isDragging) {
+        const dx = e.touches[0].clientX - lastMouseX;
+        const dy = e.touches[0].clientY - lastMouseY;
+        offsetX += dx;
+        offsetY += dy;
+        lastMouseX = e.touches[0].clientX;
+        lastMouseY = e.touches[0].clientY;
+        if (lastState) renderCellsHybrid(lastState.meta, lastState.dataView, lastState.binaryOffset, true);
+        updateInstrumentation();
+    } else if (e.touches.length === 2) {
+        const dist = Math.hypot(
+            e.touches[1].clientX - e.touches[0].clientX,
+            e.touches[1].clientY - e.touches[0].clientY
+        );
+        const deltaDist = dist - touchStartDist;
+        
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
+        const rect = canvas.getBoundingClientRect();
+        const canvasMidX = midX - rect.left;
+        const canvasMidY = midY - rect.top;
+
+        if (Math.abs(deltaDist) > 5) {
+            const zoomDelta = Math.sign(deltaDist);
+            updateZoom(zoomDelta, canvasMidX, canvasMidY);
+            touchStartDist = dist;
+        }
+    }
+}, { passive: true });
+
+const handleTouchEnd = () => {
+    if (isDragging) {
+        isDragging = false;
+        canvas.style.cursor = 'default';
+        updateServerViewportDebounced();
+    }
+    touchStartDist = 0;
+};
+
+window.addEventListener('touchend', handleTouchEnd);
+window.addEventListener('touchcancel', handleTouchEnd);
+
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const delta = -Math.sign(e.deltaY);
@@ -176,6 +242,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 function resizeCanvas() {
+    if (!canvas.parentElement) return;
     canvas.width = canvas.parentElement.clientWidth;
     canvas.height = canvas.parentElement.clientHeight;
     if (lastState) {
@@ -185,6 +252,18 @@ function resizeCanvas() {
     updateServerViewportDebounced();
 }
 window.onresize = resizeCanvas;
+
+if (typeof ResizeObserver !== 'undefined' && canvas.parentElement) {
+    const resizeObserver = new ResizeObserver(() => {
+        resizeCanvas();
+    });
+    resizeObserver.observe(canvas.parentElement);
+}
+
+if (typeof window !== 'undefined' && window.visualViewport) {
+    window.visualViewport.addEventListener('resize', resizeCanvas);
+}
+
 resizeCanvas();
 
 

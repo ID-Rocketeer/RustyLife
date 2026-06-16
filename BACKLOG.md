@@ -51,13 +51,16 @@ This document tracks future features, investigations, and known issues that have
 - [x] **Investigate Native GUI Termination:** Sometimes the Native GUI client (`rustylife-client`) completely terminates the process when the Quit button is clicked, instead of cleanly stopping the server and exiting.
 - [x] **Investigate Native GUI Zoom Invariance:** Verify that the zoom-in/out buttons in the native and network GUIs accurately preserve the center coordinates when zooming.
 - [ ] **Standardize Zoom Buttons:** Make zoom buttons uniformly use "+" and "-" across both Native/Network and Web GUIs, and add descriptive tooltips to them.
-- [ ] **Fix Native GUI Pattern Button Height:** Ensure the "Patterns" dropdown button in the native GUI matches the vertical height of adjacent buttons.
+- [x] **Fix Native GUI Pattern Button Height:** Ensure the "Patterns" dropdown button in the native GUI matches the vertical height of adjacent buttons.
 - [ ] **Comprehensive GUI Tooltips:** Ensure all interactive controls (buttons, sliders, etc.) in both the Native and Web GUIs have descriptive tooltips. Many controls currently lack this documentation.
 - [x] **Suppress Client Console Spam:** Clean up the network client's request logic to prevent continuous "Server Error: Snapshot for generation 0 not found in memory" messages.
 - [ ] **Web GUI Viewport Width Constraints:** Investigate an issue where the simulation canvas/viewport fails to expand to the full width of the screen on certain external displays.
 - [ ] **Zone-Based Click-to-Pan:** Implement viewport panning via clicks on defined zones (orthogonal and diagonal).
     - **Behavior:** Discriminate between a single click and a press-and-hold (to preserve existing drag-and-drop). A click in a zone moves the viewport by 1/2 of its dimension in that direction. Diagonal movement results in 1/4 context overlap.
 - [x] **Verify Web GUI Control State Logic:** Audit the Web GUI (`dashboard.js`) control enable/disable logic to ensure it matches the behavior recently implemented in the native/network GUI: the Stop button must transition correctly after a stop, the Patterns selector must be disabled while the simulation is running, and Step/Reset must only become active once the engine is fully quiescent. Confirm `is_running` is derived from a reliable, authoritative source (not solely from a snapshot that may be delayed at high GPS).
+- [x] **Web UI Mobile Layout and Responsive Header:** Fix horizontal layout overflow on mobile screens by implementing a responsive column-stacked flex layout.
+- [x] **Web UI Canvas Resize on Zoom/Scale Changes:** Track parent container bounds and visual viewport changes using `ResizeObserver` and `visualViewport` listener to dynamically expand the canvas layout.
+- [x] **Web UI Touch Controls (Panning & Pinch-to-Zoom):** Add support for single-finger touch panning and dual-finger pinch-to-zoom on the Web UI canvas.
 
 ## Architecture & Testing
 - [ ] **Control Plane / Data Plane (CP/DP) Refactoring:** Add a formal split to separate the Control Plane (networking, lifecycle, UI interactions) from the Data Plane (block tree, simulation rendering threads). Waiting on formal design discussion before proceeding.
@@ -70,9 +73,9 @@ This document tracks future features, investigations, and known issues that have
 
 ## GUI Aesthetics & Layout (Native/Network vs Web Parity)
 - [ ] **Web GUI Fluidity vs Native/Network Parity:** Investigate replacing the HTML5 2D Canvas in `dashboard.js` with WebGL or WebGPU. Currently, panning/zooming in the browser requires JavaScript to manually parse thousands of binary coordinates and issue individual CPU-bound `ctx.fillRect` draw calls per frame, which stutters compared to the GPU-accelerated Native clients. A WebGL implementation could pass the binary `ArrayBuffer` directly into a Vertex Buffer and apply a camera transform matrix via uniforms, achieving true performance parity with Native without JavaScript overhead.
-- [ ] **Fix Native GUI Header Overlap:** Address issues where header elements misalign and overlap when the native/network GUI window is constrained horizontally.
+- [x] **Fix Native GUI Header Overlap:** Address issues where header elements misalign and overlap when the native/network GUI window is constrained horizontally.
 - [ ] **Fix Native GUI Font Sizes:** Increase font sizes in the native/network GUI to improve readability and achieve parity with the Web GUI.
-- [ ] **Fix Native GUI Footer Scrolling:** Ensure both metric lines in the native GUI footer can be horizontally scrolled when space is constrained.
+- [x] **Fix Native GUI Footer Scrolling:** Ensure both metric lines in the native GUI footer can be horizontally scrolled when space is constrained.
 
 ## Future Features
 - [ ] **Pattern Editor:** Add pattern editor mode.
